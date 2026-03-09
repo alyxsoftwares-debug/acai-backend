@@ -71,29 +71,36 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 // ══════════════════════════════════════════════════════════
-// INTERCEPTADOR DE SLUG (URL BONITA)
-// Traduz o nome da loja (slug) para UUID automaticamente
+// TRADUTOR DE SLUG PARA UUID (URL BONITA)
+// Intercepta e reescreve a URL antes do servidor processar
 // ══════════════════════════════════════════════════════════
-app.param('loja_id', async (req, res, next, id) => {
-  // Verifica se o que chegou já é um UUID válido
-  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-  
-  if (!isUUID) {
-    // Se não for UUID, tratamos como 'slug' (ex: alyxsoftwares)
-    const { data, error } = await supabase
-      .from('lojas')
-      .select('id')
-      .eq('slug', id.toLowerCase())
-      .maybeSingle();
-
-    if (error || !data) {
-      return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo link.' });
-    }
+app.use(async (req, res, next) => {
+  if (req.url.startsWith('/api/lojas/')) {
+    // Isola apenas o nome da loja (ignorando coisas como ?q=busca)
+    const urlSemQuery = req.url.split('?')[0]; 
+    const partes = urlSemQuery.split('/');
+    const idOuSlug = partes[3]; // Pega a palavra que está na posição da loja
     
-    // Substitui o slug pelo UUID real. O resto do sistema nem vai perceber a diferença!
-    req.params.loja_id = data.id;
+    if (idOuSlug && idOuSlug !== 'undefined') {
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOuSlug);
+      
+      if (!isUUID) {
+        // Se não for UUID, busca no banco de dados qual é o UUID dessa palavra
+        const { data } = await supabase
+          .from('lojas')
+          .select('id')
+          .eq('slug', idOuSlug.toLowerCase())
+          .maybeSingle();
+          
+        if (data && data.id) {
+          // Engana o servidor trocando a palavra pelo UUID real na URL
+          req.url = req.url.replace(`/api/lojas/${idOuSlug}`, `/api/lojas/${data.id}`);
+        } else {
+          return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo link bonito.' });
+        }
+      }
+    }
   }
-  
   next();
 });
 
