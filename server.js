@@ -357,16 +357,12 @@ function _prepararParaDB(nomeColecao, dados) {
 
   // 🧹 O GRANDE FAXINEIRO DE DADOS 🧹
   // Varre todos os campos: se for um texto vazio (""), transforma em nulo (null).
-  // Isso impede que o Postgres trave ao tentar salvar "" em colunas numéricas (Taxa, Preço, etc).
+  // Isso resolve de uma vez por todas os erros de "vazio" para a loja atual e TODAS as futuras!
   for (const key of Object.keys(result)) {
     if (typeof result[key] === 'string' && result[key].trim() === '') {
       result[key] = null;
     }
   }
-
-  // 1. 'SIM'/'NAO' → boolean
-  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
-  const result = { ...dados };
 
   // 1. 'SIM'/'NAO' → boolean
   const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
