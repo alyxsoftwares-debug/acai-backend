@@ -71,6 +71,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 // ══════════════════════════════════════════════════════════
+// EXPRESS
+// ══════════════════════════════════════════════════════════
+
+const app = express();
+
+const ORIGENS_PERMITIDAS = [
+  'https://alyxsoftwares.vercel.app',
+  /\.vercel\.app$/,
+];
+
+app.use(cors({
+  origin:         ORIGENS_PERMITIDAS,
+  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials:    true,
+}));
+
+app.use(express.json());
+
+// ══════════════════════════════════════════════════════════
 // TRADUTOR DE SLUG PARA UUID (URL BONITA)
 // Intercepta e reescreve a URL antes do servidor processar
 // ══════════════════════════════════════════════════════════
@@ -103,26 +123,6 @@ app.use(async (req, res, next) => {
   }
   next();
 });
-
-// ══════════════════════════════════════════════════════════
-// EXPRESS
-// ══════════════════════════════════════════════════════════
-
-const app = express();
-
-const ORIGENS_PERMITIDAS = [
-  'https://alyxsoftwares.vercel.app',
-  /\.vercel\.app$/,
-];
-
-app.use(cors({
-  origin:         ORIGENS_PERMITIDAS,
-  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials:    true,
-}));
-
-app.use(express.json());
 
 
 // ══════════════════════════════════════════════════════════
