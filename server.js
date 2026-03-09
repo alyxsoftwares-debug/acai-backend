@@ -355,6 +355,19 @@ function _normalizarRow(nomeColecao, row) {
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
+  // 🧹 O GRANDE FAXINEIRO DE DADOS 🧹
+  // Varre todos os campos: se for um texto vazio (""), transforma em nulo (null).
+  // Isso impede que o Postgres trave ao tentar salvar "" em colunas numéricas (Taxa, Preço, etc).
+  for (const key of Object.keys(result)) {
+    if (typeof result[key] === 'string' && result[key].trim() === '') {
+      result[key] = null;
+    }
+  }
+
+  // 1. 'SIM'/'NAO' → boolean
+  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
+  const result = { ...dados };
+
   // 1. 'SIM'/'NAO' → boolean
   const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
   for (const field of boolFields) {
