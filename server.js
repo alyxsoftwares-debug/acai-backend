@@ -70,6 +70,32 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
+// ══════════════════════════════════════════════════════════
+// INTERCEPTADOR DE SLUG (URL BONITA)
+// Traduz o nome da loja (slug) para UUID automaticamente
+// ══════════════════════════════════════════════════════════
+app.param('loja_id', async (req, res, next, id) => {
+  // Verifica se o que chegou já é um UUID válido
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  
+  if (!isUUID) {
+    // Se não for UUID, tratamos como 'slug' (ex: alyxsoftwares)
+    const { data, error } = await supabase
+      .from('lojas')
+      .select('id')
+      .eq('slug', id.toLowerCase())
+      .maybeSingle();
+
+    if (error || !data) {
+      return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo link.' });
+    }
+    
+    // Substitui o slug pelo UUID real. O resto do sistema nem vai perceber a diferença!
+    req.params.loja_id = data.id;
+  }
+  
+  next();
+});
 
 // ══════════════════════════════════════════════════════════
 // EXPRESS
