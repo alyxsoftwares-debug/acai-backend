@@ -707,11 +707,11 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const cargo = (d.cargo || '').toString();
   return {
-    sucesso:    true,
+    sucesso:     true,
     cargo,
-    nome:       (d.nome || '').toString(),
-    fotoPerfil: (d.foto_perfil || '').toString(),
-    permissoes: getPermissoesCargo(cargo),
+    nome:        (d.nome || '').toString(),
+    foto_perfil: (d.foto_perfil || '').toString(),
+    permissoes:  getPermissoesCargo(cargo),
   };
 }
 
@@ -1186,19 +1186,19 @@ async function registrarVendaPDV(lojaId, pedido) {
 }
 
 async function registrarVendaBalcao(lojaId, dados) {
-  const pesoBruto = parseFloat(dados.pesoBruto_g || 0);
-  const pesoTara  = parseFloat(dados.pesoTara_g  || 0);
-  const precoKG   = parseFloat(dados.precoKG     || 0);
+  const pesoBruto = parseFloat(dados.peso_bruto_g || 0);
+  const pesoTara  = parseFloat(dados.peso_tara_g  || 0);
+  const precoKG   = parseFloat(dados.preco_kg     || 0);
   const pesoLiq   = Math.max(0, pesoBruto - pesoTara);
   const valorAcai = Math.round((pesoLiq / 1000) * precoKG * 100) / 100;
 
-  const itensExtras = dados.itensExtras || [];
+  const itensExtras = dados.itens_extras || [];
   const somaExtras  = itensExtras.reduce((s, i) => s + parseFloat(i.preco || 0), 0);
   const subtotal    = Math.round((valorAcai + somaExtras) * 100) / 100;
   const desconto    = parseFloat(dados.desconto  || 0);
   const total       = Math.max(0, Math.round((subtotal - desconto) * 100) / 100);
-  const valorPago   = parseFloat(dados.valorPago || 0);
-  const troco       = dados.pagamento === 'DINHEIRO'
+  const valorPago   = parseFloat(dados.valor_pago || 0);
+  const troco       = dados.metodo_pagamento === 'DINHEIRO'
     ? Math.max(0, Math.round((valorPago - total) * 100) / 100) : 0;
 
   const itemAcai   = pesoBruto > 0
@@ -1206,12 +1206,12 @@ async function registrarVendaBalcao(lojaId, dados) {
     : [];
   const todosItens = itemAcai.concat(itensExtras);
 
-  if (dados.nomeCliente?.trim()) {
-    const cpfLimpo = dados.cpfCliente ? dados.cpfCliente.toString().replace(/\D/g, '') : '';
+  if (dados.nome_cliente?.trim()) {
+    const cpfLimpo = dados.cpf_cliente ? dados.cpf_cliente.toString().replace(/\D/g, '') : '';
     const jaExiste = cpfLimpo ? await buscarClientePorCPF(lojaId, cpfLimpo) : null;
     if (!jaExiste) {
       await salvarCliente(lojaId, {
-        nome:     dados.nomeCliente.trim(),
+        nome:     dados.nome_cliente.trim(),
         cpf:      cpfLimpo || '',
         telefone: dados.telefone ? dados.telefone.replace(/\D/g, '') : '',
       });
@@ -1221,12 +1221,11 @@ async function registrarVendaBalcao(lojaId, dados) {
   const pedido = {
     id_venda: '', origem: 'BALCAO', data_hora: new Date().toISOString(),
     operador: dados.operador || 'CAIXA',
-    // JSONB: passa objeto diretamente (sem JSON.stringify)
-    cliente_info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '' },
+    cliente_info:    { nome: dados.nome_cliente || '', cpf: dados.cpf_cliente || '', telefone: dados.telefone || '' },
     itens_comprados: todosItens,
     subtotal, desconto, taxa_entrega: 0, total_final: total,
-    metodo_pagamento: dados.pagamento || '', status: 'ENTREGUE',
-    peso_bruto_g: pesoBruto, id_tara: dados.idTara || null, peso_tara_g: pesoTara,
+    metodo_pagamento: dados.metodo_pagamento || '', status: 'ENTREGUE',
+    peso_bruto_g: pesoBruto, id_tara: dados.id_tara || null, peso_tara_g: pesoTara,
     peso_liquido_g: pesoLiq, preco_kg: precoKG, troco,
     entregador_nome: '', cancelado_por: '',
   };
@@ -1237,22 +1236,22 @@ async function registrarVendaBalcao(lojaId, dados) {
 }
 
 async function registrarVendaDelivery(lojaId, dados) {
-  const itens    = dados.itens || [];
+  const itens    = dados.itens_comprados || [];
   const subtotal = Math.round(itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const desconto = parseFloat(dados.desconto    || 0);
-  const taxaEnt  = parseFloat(dados.taxaEntrega || 0);
+  const taxaEnt  = parseFloat(dados.taxa_entrega || 0);
   const total    = Math.max(0, Math.round((subtotal - desconto + taxaEnt) * 100) / 100);
-  const valorPago = parseFloat(dados.valorPago  || 0);
-  const troco    = dados.pagamento === 'DINHEIRO'
+  const valorPago = parseFloat(dados.valor_pago  || 0);
+  const troco    = dados.metodo_pagamento === 'DINHEIRO'
     ? Math.max(0, Math.round((valorPago - total) * 100) / 100) : 0;
 
   const pedido = {
     id_venda: '', origem: 'DELIVERY', data_hora: new Date().toISOString(),
     operador: dados.operador || 'CAIXA',
-    cliente_info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
+    cliente_info:    { nome: dados.nome_cliente || '', cpf: dados.cpf_cliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
     itens_comprados: itens,
     subtotal, desconto, taxa_entrega: taxaEnt, total_final: total,
-    metodo_pagamento: dados.pagamento || '', status: 'NOVO',
+    metodo_pagamento: dados.metodo_pagamento || '', status: 'NOVO',
     peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
     preco_kg: 0, troco, entregador_nome: '', cancelado_por: '',
   };
@@ -1264,27 +1263,27 @@ async function registrarVendaDelivery(lojaId, dados) {
 
 /** Finaliza pedido do cardápio online (rota pública — recalcula total no servidor). */
 async function finalizarPedidoOnline(lojaId, dadosPedido) {
-  if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
+  if (!dadosPedido?.itens_comprados?.length) throw new Error('Pedido vazio ou formato inválido.');
 
   const config = await getConfiguracoes(lojaId);
   if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento. Tente mais tarde.');
 
-  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
+  const subtotalReal    = Math.round(dadosPedido.itens_comprados.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
   if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
     throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
 
   const desconto = parseFloat(dadosPedido.desconto    || 0);
-  const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
+  const taxaEnt  = parseFloat(dadosPedido.taxa_entrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
 
   const pedido = {
     id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
-    cliente_info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    itens_comprados: dadosPedido.itens,
+    cliente_info:    { nome: dadosPedido.nome_cliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados: dadosPedido.itens_comprados,
     subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
-    metodo_pagamento: dadosPedido.pagamento || '', status: 'NOVO',
+    metodo_pagamento: dadosPedido.metodo_pagamento || '', status: 'NOVO',
     peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
     preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
   };
@@ -1610,17 +1609,17 @@ async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
     return finalizarPedidoOnline(lojaId, dadosPedido);
   }
 
-  if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
+  if (!dadosPedido?.itens_comprados?.length) throw new Error('Pedido vazio ou formato inválido.');
   if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento.');
 
-  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
+  const subtotalReal    = Math.round(dadosPedido.itens_comprados.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
   if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
     throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
 
   const desconto = parseFloat(dadosPedido.desconto    || 0);
-  const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
+  const taxaEnt  = parseFloat(dadosPedido.taxa_entrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
 
   // 1. Tenta gerar o PIX no Mercado Pago com um ID provisório
@@ -1638,8 +1637,8 @@ async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
   // 3. PIX gerado com sucesso → cria o pedido no banco
   const pedido = {
     id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
-    cliente_info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    itens_comprados: dadosPedido.itens,
+    cliente_info:    { nome: dadosPedido.nome_cliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados: dadosPedido.itens_comprados,
     subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
     metodo_pagamento: 'PIX', status: 'AGUARDANDO_PIX',
     peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
@@ -1965,7 +1964,7 @@ app.post('/api/lojas/:loja_id/pedidos/:id/cancelar',
 
 app.post('/api/lojas/:loja_id/pedidos/:id/pegar-delivery',
   ...guardLoja,
-  handler(req => pegarPedidoDelivery(req.params.loja_id, req.params.id, req.body.nomeEntregador)));
+  handler(req => pegarPedidoDelivery(req.params.loja_id, req.params.id, req.body.entregador_nome)));
 
 // Exclusão definitiva de um pedido (Apenas o Dono tem permissão)
 app.delete('/api/lojas/:loja_id/pedidos/:id',
