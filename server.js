@@ -412,14 +412,18 @@ function _normalizarRow(nomeColecao, row) {
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
-  // 🧹 FAXINEIRO UNIVERSAL (Limpa campos vazios e evita erros em todas as lojas)
+  // 🧹 FAXINEIRO UNIVERSAL (Resolve erros de campos vazios para sempre)
   for (const key of Object.keys(result)) {
     if (typeof result[key] === 'string' && result[key].trim() === '') {
       result[key] = null;
     }
   }
 
-  // 1. 'SIM'/'NAO' → boolean
+  // 1. Normalização de Status e Origem (Evita erro de check constraint)
+  if (result['Status']) result['Status'] = result['Status'].toString().toUpperCase();
+  if (result['Origem']) result['Origem'] = result['Origem'].toString().toUpperCase();
+
+  // 2. 'SIM'/'NAO' → boolean
   const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
   for (const field of boolFields) {
     if (field in result && typeof result[field] !== 'boolean') {
@@ -427,10 +431,6 @@ function _prepararParaDB(nomeColecao, dados) {
       result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
     }
   }
-
-  // 2. Normalização de campos de Status e Origem (evita erros de Check Constraint)
-  if (result['Status']) result['Status'] = result['Status'].toString().toUpperCase();
-  if (result['Origem']) result['Origem'] = result['Origem'].toString().toUpperCase();
 
   // 3. JSONB: parse strings JSON
   for (const field of ['Cliente_Info', 'Itens_Comprados']) {
@@ -450,12 +450,7 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 5. Timestamps vazios → remover
-  for (const field of ['Data_Hora', 'Data_Cadastro', 'Validade', 'criado_em', 'atualizado_em']) {
-    if (field in result && !result[field]) delete result[field];
-  }
-
-  // 6. Renomear campos do frontend para o DB
+  // 5. Renomear campos do frontend para nomes de coluna reais
   const map = _FIELD_MAP[nomeColecao];
   if (map?.toDB) {
     for (const [appField, dbCol] of Object.entries(map.toDB)) {
