@@ -54,6 +54,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 // ─── EXPRESS ─────────────────────────────────────────────────────────────────
 
 const app = express();
+app.set('trust proxy', 1); // <-- Adicione APENAS esta linha aqui
 
 const ORIGENS_PERMITIDAS = [
   'https://alyxsoftwares.vercel.app',
@@ -736,23 +737,28 @@ async function getAcompanhamentoPedido(lojaId, query) {
   let encontrados = [];
 
   for (const p of (pedidos || [])) {
-    const idVenda  = (p.id_venda || '').replace(/\s+/g, '').toLowerCase();
+    const idVenda  = (p.id_venda || '').toString().replace(/\s+/g, '').toLowerCase();
     let isMatchID  = idVenda && (idVenda.includes(qNorm) || (qNorm.includes(idVenda) && idVenda.length > 4));
 
     let isMatchPhone = false;
-    if (qDigits.length >= 7 && p.cliente_info) {
-      // Regra 6: jsonb já é objeto
-      const cli = (p.cliente_info || {});
-      const tel  = (cli.telefone || '').replace(/\D/g, '');
+    
+    // Tratamento blindado: Garante que cliente_info seja um objeto legível
+    let cli = p.cliente_info || {};
+    if (typeof cli === 'string') {
+      try { cli = JSON.parse(cli); } catch(e) { cli = {}; }
+    }
+
+    if (qDigits.length >= 7 && cli.telefone) {
+      const tel  = (cli.telefone || '').toString().replace(/\D/g, '');
       if (tel.length >= 7 && tel.includes(qDigits)) isMatchPhone = true;
     }
 
     if (isMatchID || isMatchPhone) {
       const dtPedido = p.data_hora ? new Date(p.data_hora) : null;
       if (isMatchPhone && !isMatchID) {
-        if (dtPedido && dtPedido >= limiteHoje) encontrados.push(p);
+        if (dtPedido && dtPedido >= limiteHoje) encontrados.push({ ...p, cliente_info_obj: cli });
       } else {
-        encontrados.push(p);
+        encontrados.push({ ...p, cliente_info_obj: cli });
       }
     }
   }
@@ -770,15 +776,18 @@ async function getAcompanhamentoPedido(lojaId, query) {
   };
 
   return encontrados.map(p => {
-    // Regra 6: jsonb já é objeto/array nativamente
-    const arr        = Array.isArray(p.itens_comprados) ? p.itens_comprados
-                     : (p.itens_comprados || []);
+    // Tratamento blindado: Evita o erro fatal se itens_comprados vier como string
+    let arr = p.itens_comprados || [];
+    if (typeof arr === 'string') {
+      try { arr = JSON.parse(arr); } catch(e) { arr = []; }
+    }
+    if (!Array.isArray(arr)) arr = [arr];
+
     const itensResumo = arr.map(it =>
       (it.descricao || '') + (it.preco ? ' — R$' + parseFloat(it.preco).toFixed(2).replace('.', ',') : '')
     ).join('\n');
 
-    const cli         = (p.cliente_info || {});
-    const statusVal   = (p.status || '').toUpperCase();
+    const statusVal = (p.status || '').toUpperCase();
 
     return {
       id_venda:        p.id_venda        || '',
@@ -788,8 +797,8 @@ async function getAcompanhamentoPedido(lojaId, query) {
       data_hora:       p.data_hora || '',
       total_final:     parseFloat(p.total_final || 0),
       entregador_nome: (p.entregador_nome || '').toString(),
-      nomeCliente:     cli.nome     || '',
-      endereco:        cli.endereco || '',
+      nomeCliente:     p.cliente_info_obj.nome     || '',
+      endereco:        p.cliente_info_obj.endereco || '',
       itensResumo,
     };
   });
