@@ -303,6 +303,51 @@ const _CACHE_COLS = new Set([
   'acai-ingredientes', 'bairros', 'configuracoes', 'cupons',
 ]);
 
+/**
+ * Mapeamento bidirecional entre nomes de campo do frontend (Firestore legado)
+ * e nomes de coluna reais no Postgres.
+ *
+ * toApp  → renomear coluna DB para o nome que o frontend espera (leitura)
+ * toDB   → renomear campo do frontend para o nome da coluna DB (escrita)
+ * dbCols → whitelist de colunas válidas da tabela (evita erro de coluna desconhecida)
+ */
+const _FIELD_MAP = {
+  'acai-categorias': {
+    toApp:  { Nome: 'Nome_Categoria' },
+    toDB:   { Nome_Categoria: 'Nome' },
+    dbCols: ['ID_Categoria', 'loja_id', 'Nome', 'Ordem', 'Ativo', 'criado_em'],
+  },
+  'acai-ingredientes': {
+    toApp:  { categoria_id: 'ID_Categoria', Foto_URL: 'Foto' },
+    toDB:   { ID_Categoria: 'categoria_id', Foto: 'Foto_URL' },
+    dbCols: ['ID_Ingrediente', 'loja_id', 'categoria_id', 'Nome', 'Disponivel',
+             'Ordem', 'Foto_URL', 'Descricao', 'Preco', 'criado_em', 'atualizado_em'],
+  },
+  'acai-modelos': {
+    toApp:  { Preco: 'Preco_Base', Foto_URL: 'Foto' },
+    toDB:   { Preco_Base: 'Preco', Foto: 'Foto_URL' },
+    dbCols: ['ID_Modelo', 'loja_id', 'Nome', 'Descricao', 'Capacidade_ml',
+             'Preco', 'Disponivel', 'Ordem', 'Foto_URL', 'criado_em', 'atualizado_em'],
+  },
+  'cardapio': {
+    toApp:  { Foto_URL: 'Foto' },
+    toDB:   { Foto: 'Foto_URL' },
+    dbCols: ['ID_Item', 'loja_id', 'Nome', 'Descricao', 'Preco', 'Categoria',
+             'Disponivel', 'Mostrar_Online', 'Foto_URL', 'Ordem', 'criado_em', 'atualizado_em'],
+  },
+  'bairros': {
+    toApp:  { Nome: 'Nome_Bairro', Taxa_Entrega: 'Taxa_R$' },
+    toDB:   { Nome_Bairro: 'Nome', 'Taxa_R$': 'Taxa_Entrega' },
+    dbCols: ['ID_Bairro', 'loja_id', 'Nome', 'Taxa_Entrega', 'Disponivel',
+             'Tempo_Entrega', 'Ordem', 'criado_em'],
+  },
+  'taras': {
+    toApp:  { Nome: 'Nome_Tara', Peso_g: 'Gramas' },
+    toDB:   { Nome_Tara: 'Nome', Gramas: 'Peso_g' },
+    dbCols: ['ID_Tara', 'loja_id', 'Nome', 'Peso_g', 'Ativo', 'criado_em'],
+  },
+};
+
 
 // ══════════════════════════════════════════════════════════
 // NORMALIZAÇÃO DE DADOS (DB ↔ APP)
@@ -342,6 +387,17 @@ function _normalizarRow(nomeColecao, row) {
     result['Status'] = s === 'ativo' ? 'Ativo' : 'inativo';
   }
 
+  // 4. Renomear colunas DB → nomes que o frontend espera (retrocompatibilidade)
+  const map = _FIELD_MAP[nomeColecao];
+  if (map?.toApp) {
+    for (const [dbCol, appField] of Object.entries(map.toApp)) {
+      if (dbCol in result) {
+        result[appField] = result[dbCol];
+        delete result[dbCol];
+      }
+    }
+  }
+
   return result;
 }
 
@@ -352,57 +408,91 @@ function _normalizarRow(nomeColecao, row) {
  * - '' → null para colunas UUID (FK)
  * - usuarios.Status: normaliza para lowercase (CHECK constraint)
  */
+
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
-  // 🧹 FAXINEIRO UNIVERSAL (Resolve erros de campos vazios para todas as lojas)
-  for (const key of Object.keys(result)) {
-    if (typeof result[key] === 'string' && result[key].trim() === '') {
-      result[key] = null;
-    }
-  }
-
   // 1. 'SIM'/'NAO' → boolean
-  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
-  for (const field of boolFields) {
+  // Aplica nos nomes de campo do APP (antes de renomear para o DB)
+  const boolFieldsApp = (_BOOL_SIM_NAO[nomeColecao] || []).map(f => {
+    // Se o campo já foi renomeado pelo _FIELD_MAP.toApp, usa o nome do app
+    const map = _FIELD_MAP[nomeColecao];
+    const reversed = map?.toApp ? Object.entries(map.toApp).find(([, appF]) => appF === f) : null;
+    return reversed ? reversed[1] : f; // mantém o nome do app
+  });
+  const boolFieldsDB = _BOOL_SIM_NAO[nomeColecao] || [];
+  const allBoolFields = [...new Set([...boolFieldsApp, ...boolFieldsDB])];
+  for (const field of allBoolFields) {
     if (field in result && typeof result[field] !== 'boolean') {
       const s = (result[field] || '').toString().toUpperCase().trim();
       result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
     }
   }
 
-  // 2. usuarios.Status: normaliza para lowercase
+  // 2. usuarios.Status: aceita 'Ativo'/'ativo'/'inativo' → lowercase para CHECK
   if (nomeColecao === 'usuarios' && result['Status'] !== undefined) {
     const s = (result['Status'] || '').toString().toLowerCase();
     result['Status'] = s === 'ativo' ? 'ativo' : 'inativo';
   }
 
-  // 3. JSONB: parse strings JSON
+  // 3. JSONB: parse strings JSON (Postgres JSONB aceita objetos JS)
   for (const field of ['Cliente_Info', 'Itens_Comprados']) {
     if (field in result && typeof result[field] === 'string') {
       if (!result[field]) {
         result[field] = field === 'Itens_Comprados' ? [] : null;
       } else {
-        try { result[field] = JSON.parse(result[field]); } catch { }
+        try { result[field] = JSON.parse(result[field]); } catch { /* mantém string */ }
       }
     }
   }
 
-  // 4. UUID FK vazio → null
-  for (const field of ['ID_Tara']) {
+  // 4. UUID FK vazio → null (evita erro de cast no Postgres)
+  for (const field of ['ID_Tara', 'categoria_id', 'ID_Categoria']) {
     if (field in result && (result[field] === '' || result[field] === undefined)) {
       result[field] = null;
     }
   }
 
-  // 5. Timestamps vazios → remover
-  for (const field of ['Data_Hora', 'Data_Cadastro', 'Validade', 'criado_em', 'atualizado_em']) {
+  // 5. Timestamps vazios → remover (usa DEFAULT do Postgres)
+  for (const field of ['Data_Hora', 'Data_Cadastro', 'criado_em', 'atualizado_em']) {
     if (field in result && !result[field]) delete result[field];
+  }
+
+  // 6. Validade de cupom: 'dd/MM/yyyy' ou 'dd/MM/yyyy HH:mm:ss' → ISO para TIMESTAMPTZ
+  if (nomeColecao === 'cupons' && result['Validade']) {
+    const strVal = result['Validade'].toString().trim().split(' ')[0]; // pega só a data
+    const d = _parseDataDDMMYYYY(strVal);
+    if (d && !isNaN(d.getTime())) {
+      result['Validade'] = d.toISOString();
+    } else {
+      delete result['Validade']; // não envia se inválido
+    }
+  } else if ('Validade' in result && !result['Validade']) {
+    delete result['Validade'];
+  }
+
+  // 7. Renomear campos do frontend → nomes de coluna reais do Postgres
+  const map = _FIELD_MAP[nomeColecao];
+  if (map?.toDB) {
+    for (const [appField, dbCol] of Object.entries(map.toDB)) {
+      if (appField in result) {
+        result[dbCol] = result[appField];
+        delete result[appField];
+      }
+    }
+  }
+
+  // 8. Remover campos desconhecidos pelo Postgres (evita erro de coluna não encontrada)
+  //    Só aplica nas coleções que têm whitelist definida em _FIELD_MAP
+  if (map?.dbCols) {
+    const permitidos = new Set([...map.dbCols, 'loja_id']);
+    for (const k of Object.keys(result)) {
+      if (!permitidos.has(k)) delete result[k];
+    }
   }
 
   return result;
 }
-
 
 // ══════════════════════════════════════════════════════════
 // HELPERS SUPABASE — SUBSTITUEM OS HELPERS DO FIRESTORE
