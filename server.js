@@ -38,6 +38,7 @@ const cors            = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const jwt             = require('jsonwebtoken');
 const rateLimit       = require('express-rate-limit');
+const bcrypt          = require('bcrypt');
 require('dotenv').config();
 
 
@@ -47,6 +48,10 @@ require('dotenv').config();
 
 const JWT_SECRET                = process.env.JWT_SECRET;
 const ASAAS_WEBHOOK_TOKEN       = process.env.ASAAS_WEBHOOK_TOKEN || '';
+const ASAAS_API_KEY             = process.env.ASAAS_API_KEY        || '';
+const ASAAS_BASE_URL            = process.env.ASAAS_ENV === 'production'
+  ? 'https://api.asaas.com/v3'
+  : 'https://sandbox.asaas.com/api/v3';
 const PORT                      = process.env.PORT || 3000;
 const TZ                        = process.env.TZ   || 'America/Fortaleza';
 const SUPABASE_URL              = process.env.SUPABASE_URL;
@@ -57,6 +62,9 @@ if (!SUPABASE_URL)              throw new Error('❌  SUPABASE_URL não definido
 if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('❌  SUPABASE_SERVICE_ROLE_KEY não definido no .env');
 if (!ASAAS_WEBHOOK_TOKEN) {
   console.warn('⚠️  ASAAS_WEBHOOK_TOKEN não definido — webhook Asaas estará desprotegido!');
+}
+if (!ASAAS_API_KEY) {
+  console.warn('⚠️  ASAAS_API_KEY não definido — cadastro de lojas não funcionará!');
 }
 
 
@@ -728,11 +736,30 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const d = rows[0];
 
-  // Na verificação de login:
-  const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
-if (!senhaValida) {
-  return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
-}
+  // Verifica se a senha está em bcrypt ou ainda em texto puro (migração gradual)
+  const senhaNoBanco = (d.senha || '').toString();
+  const ehBcrypt = senhaNoBanco.startsWith('$2b$') || senhaNoBanco.startsWith('$2a$');
+
+  let senhaValida = false;
+  if (ehBcrypt) {
+    senhaValida = await bcrypt.compare(senhaDigitada.toString(), senhaNoBanco);
+  } else {
+    // Senha ainda em texto puro → compara e já aproveita para migrar
+    senhaValida = senhaNoBanco === senhaDigitada.toString();
+    if (senhaValida) {
+      // Migra automaticamente para bcrypt na próxima vez que o usuário logar
+      const hash = await bcrypt.hash(senhaDigitada.toString(), 12);
+      await supabase
+        .from('usuarios')
+        .update({ senha: hash })
+        .eq('id_usuario', d.id_usuario)
+        .eq('loja_id', lojaId);
+    }
+  }
+
+  if (!senhaValida) {
+    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
+  }
 
 // Na criação/atualização de usuário (em salvarUsuario), hash antes de salvar:
 // dados.senha = await bcrypt.hash(dados.senha, 12);
@@ -1774,6 +1801,68 @@ app.post('/api/lojas/:loja_id/auth/validar-supervisor', loginLimiter, handler(re
 
 
 // ══════════════════════════════════════════════════════════
+// ASAAS — COBRANÇA E ASSINATURA RECORRENTE
+// ══════════════════════════════════════════════════════════
+
+/**
+ * Cria um cliente no Asaas e retorna o asaas_customer_id.
+ * Chamado uma única vez ao cadastrar uma nova loja.
+ */
+async function criarClienteAsaas({ nome, cpfCnpj, email, telefone }) {
+  if (!ASAAS_API_KEY) throw new Error('ASAAS_API_KEY não configurada.');
+
+  const resp = await fetch(`${ASAAS_BASE_URL}/customers`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'access_token': ASAAS_API_KEY },
+    body: JSON.stringify({
+      name:        nome,
+      cpfCnpj:     cpfCnpj.replace(/\D/g, ''),
+      email:       email    || undefined,
+      mobilePhone: telefone ? telefone.replace(/\D/g, '') : undefined,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  const data = await resp.json();
+  if (!data.id) throw new Error(`[Asaas] Falha ao criar cliente: ${JSON.stringify(data)}`);
+  return data.id; // ex: "cus_000005113026"
+}
+
+/**
+ * Cria uma assinatura mensal no Asaas para a loja.
+ * O Asaas envia o boleto/PIX por e-mail automaticamente ao cliente.
+ * Quando o cliente pagar → webhook PAYMENT_RECEIVED → loja fica 'ativo'.
+ * Quando vencer sem pagar → webhook PAYMENT_OVERDUE → loja fica 'bloqueado'.
+ */
+async function criarAssinaturaAsaas({ asaasCustomerId, valor, descricao, diaVencimento }) {
+  if (!ASAAS_API_KEY) throw new Error('ASAAS_API_KEY não configurada.');
+
+  // Calcula a próxima data de vencimento
+  const hoje = new Date();
+  const venc  = new Date(hoje.getFullYear(), hoje.getMonth(), diaVencimento || 10);
+  if (venc <= hoje) venc.setMonth(venc.getMonth() + 1);
+  const dataVenc = venc.toISOString().split('T')[0]; // "2026-04-10"
+
+  const resp = await fetch(`${ASAAS_BASE_URL}/subscriptions`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'access_token': ASAAS_API_KEY },
+    body: JSON.stringify({
+      customer:    asaasCustomerId,
+      billingType: 'UNDEFINED',   // Cliente escolhe: boleto, PIX ou cartão
+      value:       valor,
+      nextDueDate: dataVenc,
+      cycle:       'MONTHLY',
+      description: descricao || 'Assinatura — Sistema de Delivery',
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  const data = await resp.json();
+  if (!data.id) throw new Error(`[Asaas] Falha ao criar assinatura: ${JSON.stringify(data)}`);
+  return data;
+}
+
+// ══════════════════════════════════════════════════════════
 // ROTAS — WEBHOOK ASAAS
 // Não requer autenticação JWT, mas valida token do Asaas.
 // ══════════════════════════════════════════════════════════
@@ -2082,6 +2171,70 @@ app.post('/api/lojas/:loja_id/pix/confirmar',
   verificarStatusLoja,
   handler(req => confirmarPagamentoELiberarPedido(req.params.loja_id, req.body.idVenda, req.body.idPagamento)));
 
+
+// ══════════════════════════════════════════════════════════
+// ROTAS — ADMIN (Cadastro de novas lojas no SaaS)
+// Proteja esta rota com um segredo fixo em produção
+// ou coloque atrás de um painel administrativo.
+// ══════════════════════════════════════════════════════════
+
+/**
+ * POST /api/admin/lojas
+ * Body: { nome_loja, cpfCnpj, email, telefone, plano, valor_mensalidade, dia_vencimento }
+ *
+ * O que faz:
+ *  1. Cria o cliente no Asaas
+ *  2. Cria a assinatura mensal (Asaas já manda o link de pagamento por e-mail)
+ *  3. Insere a loja no banco com status 'bloqueado' (só ativa após o 1º pagamento)
+ *  4. Retorna o lojaId para configurar o frontend do cliente
+ */
+app.post('/api/admin/lojas', handler(async req => {
+  const {
+    nome_loja, cpfCnpj, email, telefone,
+    plano            = 'pro',
+    valor_mensalidade = 99.90,
+    dia_vencimento    = 10,
+    slug,
+  } = req.body;
+
+  if (!nome_loja || !cpfCnpj) {
+    return { sucesso: false, mensagem: 'nome_loja e cpfCnpj são obrigatórios.' };
+  }
+
+  // 1. Cria o cliente no Asaas
+  const asaasCustomerId = await criarClienteAsaas({ nome: nome_loja, cpfCnpj, email, telefone });
+
+  // 2. Cria a assinatura recorrente (Asaas envia o boleto/PIX pro cliente por e-mail)
+  await criarAssinaturaAsaas({
+    asaasCustomerId,
+    valor:          valor_mensalidade,
+    descricao:      `Plano ${plano.toUpperCase()} — ${nome_loja}`,
+    diaVencimento:  dia_vencimento,
+  });
+
+  // 3. Insere a loja no banco como 'bloqueado' — só abre quando o Asaas confirmar o pagamento
+  const { data: novaLoja, error } = await supabase
+    .from('lojas')
+    .insert({
+      nome_loja,
+      status:             'bloqueado',
+      plano:              plano.toLowerCase(),
+      asaas_customer_id:  asaasCustomerId,
+      slug:               slug || nome_loja.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+    })
+    .select('id, slug')
+    .single();
+
+  if (error) throw new Error(`[cadastroLoja] ${error.message}`);
+
+  return {
+    sucesso:         true,
+    mensagem:        `Loja criada! Link de pagamento enviado para ${email}. A loja ficará ativa após o pagamento.`,
+    lojaId:          novaLoja.id,
+    slug:            novaLoja.slug,
+    asaasCustomerId,
+  };
+}));
 
 // ══════════════════════════════════════════════════════════
 // HEALTH CHECK
