@@ -58,6 +58,7 @@ if (!ASAAS_WEBHOOK_TOKEN)  console.warn('⚠️  ASAAS_WEBHOOK_TOKEN não defini
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false },
+  db: { schema: 'acaiteria' } // <-- O Segredo: Aponta para o "bairro" correto
 });
 
 // ─── EXPRESS ─────────────────────────────────────────────────────────────────
