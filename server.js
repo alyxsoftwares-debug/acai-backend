@@ -1,21 +1,21 @@
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║  AÇAÍTERIA SaaS — BACK-END Node.js + Express + Supabase (PostgreSQL)        ║
+ * ║  AÇAÍTERIA SaaS — BACK-END Node.js + Express + Supabase/PostgreSQL          ║
  * ║  Arquitetura Multi-tenant  |  Cobrança via Asaas                            ║
  * ║                                                                              ║
- * ║  Estrutura PostgreSQL (schema: acaiteria):                                  ║
- * ║   acaiteria.lojas          → { status, asaas_customer_id, ... }             ║
- * ║   acaiteria.usuarios       → usuários da loja (loja_id FK)                  ║
- * ║   acaiteria.pedidos        → pedidos/vendas  (loja_id FK)                   ║
- * ║   acaiteria.cardapio       → itens fixos     (loja_id FK)                   ║
- * ║   acaiteria.acai_categorias                  (loja_id FK)                   ║
- * ║   acaiteria.acai_ingredientes                (loja_id FK)                   ║
- * ║   acaiteria.acai_modelos                     (loja_id FK)                   ║
- * ║   acaiteria.bairros                          (loja_id FK)                   ║
- * ║   acaiteria.cupons                           (loja_id FK)                   ║
- * ║   acaiteria.taras                            (loja_id FK)                   ║
- * ║   acaiteria.clientes                         (loja_id FK)                   ║
- * ║   acaiteria.configuracoes  → 1:1 com lojas   (loja_id PK+FK)               ║
+ * ║  Tabelas Supabase (Multi-tenant via loja_id):                               ║
+ * ║   lojas              → { id, status, asaas_customer_id, slug, ... }         ║
+ * ║   usuarios           → { id_usuario, loja_id, login, senha, cargo, ... }    ║
+ * ║   pedidos            → { id_venda, loja_id, origem, cliente_info(jsonb)...} ║
+ * ║   cardapio           → itens fixos do cardápio                              ║
+ * ║   acai_categorias    → categorias do monte-açaí                             ║
+ * ║   acai_ingredientes  → ingredientes do monte-açaí                           ║
+ * ║   acai_modelos       → tamanhos/modelos do açaí                             ║
+ * ║   bairros            → bairros de entrega                                   ║
+ * ║   cupons             → cupons de desconto                                   ║
+ * ║   taras              → pesos de tara para balança                           ║
+ * ║   clientes           → cadastro de clientes                                 ║
+ * ║   configuracoes      → configurações por loja (1 linha por loja)            ║
  * ╚══════════════════════════════════════════════════════════════════════════════╝
  *
  * Variáveis de ambiente (.env):
@@ -23,80 +23,50 @@
  *   TZ=America/Fortaleza
  *   JWT_SECRET=<string longa e aleatória>
  *   SUPABASE_URL=https://<seu-projeto>.supabase.co
- *   SUPABASE_SERVICE_ROLE_KEY=<sua-service-role-key>
- *   ASAAS_WEBHOOK_TOKEN=<token que você define no painel Asaas>
- *   ONESIGNAL_REST_API_KEY=<chave da API OneSignal>
- *
- * ⚠️  PRÉ-REQUISITO SUPABASE:
- *   Em Settings → API → "Extra Search Path", adicione o schema: acaiteria
+ *   SUPABASE_SERVICE_KEY=<service_role key — NUNCA exponha no frontend>
+ *   ASAAS_WEBHOOK_TOKEN=<token definido no painel Asaas>
+ *   ONESIGNAL_REST_API_KEY=<chave REST do OneSignal>
  */
 
 'use strict';
 
-const express         = require('express');
-const cors            = require('cors');
-const { createClient } = require('@supabase/supabase-js');
-const jwt             = require('jsonwebtoken');
-const rateLimit       = require('express-rate-limit');
-const bcrypt          = require('bcrypt');
+const express              = require('express');
+const cors                 = require('cors');
+const jwt                  = require('jsonwebtoken');
+const { createClient }     = require('@supabase/supabase-js');
 require('dotenv').config();
 
+// ─── VALIDAÇÃO DE AMBIENTE ────────────────────────────────────────────────────
 
-// ══════════════════════════════════════════════════════════
-// VALIDAÇÃO DE AMBIENTE
-// ══════════════════════════════════════════════════════════
+const JWT_SECRET          = process.env.JWT_SECRET;
+const SUPABASE_URL        = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY= process.env.SUPABASE_SERVICE_KEY;
+const ASAAS_WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN || '';
+const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY || '';
+const ONESIGNAL_APP_ID    = 'c7565fa8-cd8c-4264-85b4-1a9d9cf150af';
+const PORT                = process.env.PORT || 3000;
+const TZ                  = process.env.TZ   || 'America/Fortaleza';
 
-const JWT_SECRET                = process.env.JWT_SECRET;
-const ASAAS_WEBHOOK_TOKEN       = process.env.ASAAS_WEBHOOK_TOKEN || '';
-const ASAAS_API_KEY             = process.env.ASAAS_API_KEY        || '';
-const ASAAS_BASE_URL            = process.env.ASAAS_ENV === 'production'
-  ? 'https://api.asaas.com/v3'
-  : 'https://sandbox.asaas.com/api/v3';
-const PORT                      = process.env.PORT || 3000;
-const TZ                        = process.env.TZ   || 'America/Fortaleza';
-const SUPABASE_URL              = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!JWT_SECRET)           throw new Error('❌  JWT_SECRET não definido no .env');
+if (!SUPABASE_URL)         throw new Error('❌  SUPABASE_URL não definido no .env');
+if (!SUPABASE_SERVICE_KEY) throw new Error('❌  SUPABASE_SERVICE_KEY não definido no .env');
+if (!ASAAS_WEBHOOK_TOKEN)  console.warn('⚠️  ASAAS_WEBHOOK_TOKEN não definido — webhook Asaas desprotegido!');
 
-if (!JWT_SECRET)                throw new Error('❌  JWT_SECRET não definido no .env');
-if (!SUPABASE_URL)              throw new Error('❌  SUPABASE_URL não definido no .env');
-if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error('❌  SUPABASE_SERVICE_ROLE_KEY não definido no .env');
-if (!ASAAS_WEBHOOK_TOKEN) {
-  console.warn('⚠️  ASAAS_WEBHOOK_TOKEN não definido — webhook Asaas estará desprotegido!');
-}
-if (!ASAAS_API_KEY) {
-  console.warn('⚠️  ASAAS_API_KEY não definido — cadastro de lojas não funcionará!');
-}
+// ─── SUPABASE ─────────────────────────────────────────────────────────────────
+// Usa a service_role key no back-end: ignora RLS e tem acesso total.
+// JAMAIS exponha esta chave no frontend.
 
-
-// ══════════════════════════════════════════════════════════
-// SUPABASE CLIENT
-// Service Role Key: bypassa RLS → todo isolamento de loja_id
-// é garantido pelo código (middlewares + queries).
-// ══════════════════════════════════════════════════════════
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  db:   { schema: 'acaiteria' },          // todas as queries são em acaiteria.*
-  auth: { persistSession: false, autoRefreshToken: false },
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+  auth: { persistSession: false },
 });
 
-// ══════════════════════════════════════════════════════════
-// EXPRESS
-// ══════════════════════════════════════════════════════════
+// ─── EXPRESS ─────────────────────────────────────────────────────────────────
 
 const app = express();
 
-// Diz ao Express para confiar no Proxy do Render/Vercel (Evita bloquear todo mundo)
-app.set('trust proxy', 1);
-
-// Escudo contra Força Bruta no Login (Bloqueia após 5 tentativas erradas por 15 min)
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 5,
-  message: { sucesso: false, mensagem: 'Muitas tentativas de login. Por segurança, aguarde 15 minutos.' }
-});
-
 const ORIGENS_PERMITIDAS = [
-  'https://alyxsoftwares.vercel.app'
+  'https://alyxsoftwares.vercel.app',
+  /\.vercel\.app$/,
 ];
 
 app.use(cors({
@@ -108,79 +78,12 @@ app.use(cors({
 
 app.use(express.json());
 
-// ══════════════════════════════════════════════════════════
-// CACHES GLOBAIS DE ALTA PERFORMANCE (Evita sobrecarga no banco)
-// ══════════════════════════════════════════════════════════
-const _cacheSlugs = new Map();       // slug -> { uuid, ts }
-const SLUG_TTL_MS = 60 * 60 * 1000;  // 1 hora
-const _cacheStatusLoja = new Map();  // loja_id -> { status, ts }
-const STATUS_TTL_MS = 5 * 60 * 1000; // 5 minutos de cache para o status
-
-// Rotina de limpeza periódica de chaves órfãs (Evita Memory Leak para >500 Lojas)
-setInterval(() => {
-  const agora = Date.now();
-  for (const [key, val] of _cacheSlugs.entries()) {
-    if (agora - val.ts >= SLUG_TTL_MS) _cacheSlugs.delete(key);
-  }
-  for (const [key, val] of _cacheStatusLoja.entries()) {
-    if (agora - val.ts >= STATUS_TTL_MS) _cacheStatusLoja.delete(key);
-  }
-  // Aplica também a limpeza ao _cacheCardapio
-  if (typeof _cacheCardapio !== 'undefined') {
-    for (const [key, val] of _cacheCardapio.entries()) {
-      if (agora - val.ts >= 15 * 60 * 1000) _cacheCardapio.delete(key);
-    }
-  }
-}, 10 * 60 * 1000); // Roda a cada 10 minutos sem bloquear a thread principal
 
 // ══════════════════════════════════════════════════════════
-// TRADUTOR DE SLUG PARA UUID (URL BONITA)
-// Intercepta e reescreve a URL antes do servidor processar
-// ══════════════════════════════════════════════════════════
-app.use(async (req, res, next) => {
-  if (req.url.startsWith('/api/lojas/')) {
-    const urlSemQuery = req.url.split('?')[0]; 
-    const partes = urlSemQuery.split('/');
-    const idOuSlug = partes[3]; 
-    
-    if (idOuSlug && idOuSlug !== 'undefined') {
-      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOuSlug);
-      
-      if (!isUUID) {
-        const slugNormalizado = idOuSlug.toLowerCase();
-        
-        // 1. Verifica no Cache Memory (Super rápido)
-        const entradaSlug = _cacheSlugs.get(slugNormalizado);
-        if (entradaSlug && (Date.now() - entradaSlug.ts < SLUG_TTL_MS)) {
-          req.url = req.url.replace(`/api/lojas/${idOuSlug}`, `/api/lojas/${entradaSlug.uuid}`);
-          return next();
-        }
-
-        // 2. Se não tem no cache, busca no banco
-        const { data } = await supabase
-          .from('lojas')
-          .select('id')
-          .eq('slug', slugNormalizado)
-          .maybeSingle();
-          
-        if (data && data.id) {
-          _cacheSlugs.set(slugNormalizado, data.id); // Salva no cache
-          req.url = req.url.replace(`/api/lojas/${idOuSlug}`, `/api/lojas/${data.id}`);
-        } else {
-          return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo link bonito.' });
-        }
-      }
-    }
-  }
-  next();
-});
-
-
-// ══════════════════════════════════════════════════════════
-// UTILITÁRIOS INTERNOS
+// UTILITÁRIOS
 // ══════════════════════════════════════════════════════════
 
-/** Retorna "dd/MM/yyyy HH:mm:ss" no fuso configurado. */
+/** Retorna "dd/MM/yyyy HH:mm:ss" no fuso configurado (uso em textos, ex: cancelado_por). */
 function _agora() {
   return new Date()
     .toLocaleString('pt-BR', { timeZone: TZ, hour12: false })
@@ -202,43 +105,6 @@ function _parseDataDDMMYYYY(str) {
   return new Date(a, m - 1, d);
 }
 
-/**
- * Converte valor de data para objeto Date.
- * Suporta: ISO string do Postgres, string "dd/MM/yyyy HH:mm:ss", Date.
- */
-function _toDate(valor) {
-  if (!valor) return null;
-  if (valor instanceof Date) return isNaN(valor.getTime()) ? null : valor;
-  const str = valor.toString().trim();
-  if (!str) return null;
-  // Formato ISO do PostgreSQL: "2024-11-08T17:30:45.000Z"
-  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) return new Date(str);
-  // Formato já normalizado pelo app: "08/11/2024 14:30:45"
-  const partes = str.split(' ');
-  if (partes.length >= 2 && partes[0].includes('/')) {
-    const d = partes[0].split('/');
-    const t = partes[1].split(':');
-    return new Date(+d[2], +d[1] - 1, +d[0], +t[0], +t[1], +(t[2] || 0));
-  }
-  return _parseDataDDMMYYYY(partes[0]);
-}
-
-/**
- * Converte timestamps ISO do Postgres para "dd/MM/yyyy HH:mm:ss" dentro de um
- * objeto (compatibilidade retroativa com o formato esperado pelo frontend).
- */
-function _normalizarTimestamps(obj) {
-  for (const k of Object.keys(obj)) {
-    const v = obj[k];
-    if (v && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
-      obj[k] = new Date(v)
-        .toLocaleString('pt-BR', { timeZone: TZ, hour12: false })
-        .replace(',', '');
-    }
-  }
-  return obj;
-}
-
 function _resumoVazio() {
   return {
     totalVendas: 0, totalDescontos: 0, ticketMedio: 0,
@@ -248,28 +114,51 @@ function _resumoVazio() {
 
 
 // ══════════════════════════════════════════════════════════
-// CACHE POR LOJA (in-memory, TTL 15 min)
+// CACHE EM MEMÓRIA (TTL configurável)
+// Estratégia senior para 500+ lojas: evita esgotar conexões
 // ══════════════════════════════════════════════════════════
 
-const CACHE_TTL_MS   = 15 * 60 * 1000;
-const _cacheCardapio = new Map(); // loja_id → { data, ts }
+const CACHE_CARDAPIO_TTL_MS = 15 * 60 * 1000; //  15 min
+const CACHE_STATUS_TTL_MS   =  5 * 60 * 1000; //   5 min
+const CACHE_SLUG_TTL_MS     = 30 * 60 * 1000; //  30 min
 
-function invalidarCacheCardapio(lojaId) {
-  _cacheCardapio.delete(lojaId);
-}
+/** Cache do pacote de cardápio público. Invalidado ao salvar qualquer dado relacionado. */
+const _cacheCardapio = new Map();   // loja_id → { data, ts }
 
+/** Cache do status da loja (ativo/bloqueado). Invalidado pelo webhook Asaas. */
+const _cacheLojaStatus = new Map(); // loja_id → { status, ts }
+
+/** Cache de tradução slug → uuid. Raramente muda; TTL longo. */
+const _cacheSlugParaId = new Map(); // slug → { id, ts }
+
+// --- Cardápio ---
 function _getCacheCardapio(lojaId) {
-  const entry = _cacheCardapio.get(lojaId);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) {
-    _cacheCardapio.delete(lojaId);
-    return null;
-  }
-  return entry.data;
+  const e = _cacheCardapio.get(lojaId);
+  if (!e || Date.now() - e.ts > CACHE_CARDAPIO_TTL_MS) { _cacheCardapio.delete(lojaId); return null; }
+  return e.data;
 }
+function _setCacheCardapio(lojaId, data) { _cacheCardapio.set(lojaId, { data, ts: Date.now() }); }
+function invalidarCacheCardapio(lojaId) { _cacheCardapio.delete(lojaId); }
 
-function _setCacheCardapio(lojaId, data) {
-  _cacheCardapio.set(lojaId, { data, ts: Date.now() });
+// --- Status da loja ---
+function _getStatusCache(lojaId) {
+  const e = _cacheLojaStatus.get(lojaId);
+  if (!e || Date.now() - e.ts > CACHE_STATUS_TTL_MS) { _cacheLojaStatus.delete(lojaId); return undefined; }
+  return e.status;
+}
+function _setStatusCache(lojaId, status) { _cacheLojaStatus.set(lojaId, { status, ts: Date.now() }); }
+function invalidarStatusCache(lojaId)    { _cacheLojaStatus.delete(lojaId); }
+
+// --- Slug → ID ---
+async function resolverSlugParaId(slug) {
+  const entry = _cacheSlugParaId.get(slug);
+  if (entry && Date.now() - entry.ts < CACHE_SLUG_TTL_MS) return entry.id;
+
+  const { data, error } = await supabase
+    .from('lojas').select('id').eq('slug', slug).maybeSingle();
+  if (error || !data) return null;
+  _cacheSlugParaId.set(slug, { id: data.id, ts: Date.now() });
+  return data.id;
 }
 
 
@@ -278,320 +167,112 @@ function _setCacheCardapio(lojaId, data) {
 // ══════════════════════════════════════════════════════════
 
 const _PERMISSOES = {
-  Dono:       ['abaPedidos', 'abaDelivery', 'abaRetirada', 'abaRelatorios', 'abaItens', 'abaMonteAcai', 'abaConfig'],
-  Gerente:    ['abaPedidos', 'abaDelivery', 'abaRetirada', 'abaRelatorios', 'abaItens', 'abaMonteAcai'],
-  Supervisor: ['abaPedidos', 'abaDelivery', 'abaRetirada', 'abaItens', 'abaMonteAcai'],
-  Operador:   ['abaPedidos', 'abaDelivery', 'abaRetirada'],
+  Dono:       ['abaPedidos','abaDelivery','abaRetirada','abaRelatorios','abaItens','abaMonteAcai','abaConfig'],
+  Gerente:    ['abaPedidos','abaDelivery','abaRetirada','abaRelatorios','abaItens','abaMonteAcai'],
+  Supervisor: ['abaPedidos','abaDelivery','abaRetirada','abaItens','abaMonteAcai'],
+  Operador:   ['abaPedidos','abaDelivery','abaRetirada'],
   Entregador: ['abaDelivery'],
 };
 
 function getPermissoesCargo(cargo) {
-  return _PERMISSOES[(cargo || '').toString().trim()] || ['abaDelivery'];
+  return _PERMISSOES[(cargo || '').trim()] || ['abaDelivery'];
 }
 
 
 // ══════════════════════════════════════════════════════════
-// MAPEAMENTO: Coleção Firestore → Tabela Postgres
+// MAPEAMENTO: coleção (legado) → tabela Supabase + PK
 // ══════════════════════════════════════════════════════════
 
-/** Firestore collection name → Postgres table name (dentro do schema acaiteria). */
 const _TABLE_MAP = {
-  'lojas':             'lojas',
-  'usuarios':          'usuarios',
-  'pedidos':           'pedidos',
-  'cardapio':          'cardapio',
-  'acai-categorias':   'acai_categorias',
-  'acai-ingredientes': 'acai_ingredientes',
-  'acai-modelos':      'acai_modelos',
-  'bairros':           'bairros',
-  'cupons':            'cupons',
-  'taras':             'taras',
-  'clientes':          'clientes',
-  'configuracoes':     'configuracoes',
+  'usuarios':          { tabela: 'usuarios',          pk: 'id_usuario'     },
+  'cardapio':          { tabela: 'cardapio',           pk: 'id_item'        },
+  'acai-categorias':   { tabela: 'acai_categorias',    pk: 'id_categoria'   },
+  'acai-ingredientes': { tabela: 'acai_ingredientes',  pk: 'id_ingrediente' },
+  'acai-modelos':      { tabela: 'acai_modelos',       pk: 'id_modelo'      },
+  'bairros':           { tabela: 'bairros',            pk: 'id_bairro'      },
+  'cupons':            { tabela: 'cupons',             pk: 'codigo_cupom'   },
+  'taras':             { tabela: 'taras',              pk: 'id_tara'        },
+  'clientes':          { tabela: 'clientes',           pk: 'id_cliente'     },
+  'pedidos':           { tabela: 'pedidos',            pk: 'id_venda'       },
 };
 
-/** Coluna de chave primária por coleção. */
-const _PK_MAP = {
-  'usuarios':          'id_usuario',
-  'pedidos':           'id_venda',
-  'cardapio':          'id_item',
-  'acai-categorias':   'id_categoria',
-  'acai-ingredientes': 'id_ingrediente',
-  'acai-modelos':      'id_modelo',
-  'bairros':           'id_bairro',
-  'cupons':            'codigo_cupom',
-  'taras':             'id_tara',
-  'clientes':          'id_cliente',
-};
-
-/**
- * Coleções cujos campos booleanos no Postgres devem ser expostos como
- * 'SIM' / 'NAO' para o frontend.
- */
-const _BOOL_SIM_NAO = {
-  'acai-ingredientes': ['disponivel'],
-  'acai-modelos':      ['disponivel'],
-  'cardapio':          ['disponivel', 'mostrar_online'],
-  'bairros':           ['disponivel'],
-  'taras':             ['ativo'],
-  'cupons':            ['ativo', 'usar_cardapio'],
-  'acai-categorias':   ['ativo'],
-  'configuracoes':     ['retirada_loja_ativo', 'autoimprimir_balcao', 'autoimprimir_delivery', 'mostrar_acai_rapido_pdv'],
-};
-
-/** Coleções cujo cache de cardápio deve ser invalidado após escrita. */
+/** Conjunto de tabelas que impactam o cache do cardápio. */
 const _CACHE_COLS = new Set([
-  'cardapio', 'acai-modelos', 'acai-categorias',
-  'acai-ingredientes', 'bairros', 'configuracoes', 'cupons',
+  'cardapio', 'acai_modelos', 'acai_categorias',
+  'acai_ingredientes', 'bairros', 'configuracoes', 'cupons',
 ]);
 
 
-
-
 // ══════════════════════════════════════════════════════════
-// NORMALIZAÇÃO DE DADOS (DB ↔ APP)
+// HELPERS SUPABASE — OPERAÇÕES GENÉRICAS
 // ══════════════════════════════════════════════════════════
 
 /**
- * Normaliza uma linha do Postgres para o formato esperado pelo frontend:
- * - TIMESTAMPTZ ISO → "dd/MM/yyyy HH:mm:ss"
- * - BOOLEAN → 'SIM' / 'NAO' para campos mapeados em _BOOL_SIM_NAO
+ * Lê todos os registros de uma tabela filtrando por loja_id.
+ * Equivale ao antigo lerSubcolecao().
  */
-function _normalizarRow(nomeColecao, row) {
-  if (!row) return row;
-  const result = { ...row };
-
-  // 1. Timestamps ISO → string legível
-  for (const k of Object.keys(result)) {
-    const v = result[k];
-    if (v && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
-      result[k] = new Date(v)
-        .toLocaleString('pt-BR', { timeZone: TZ, hour12: false })
-        .replace(',', '');
-    }
-  }
-
-  // 2. Booleanos nativos: O backend retorna o tipo nativo puro do PostgreSQL.
-  // (Certifique-se que o front-end trata adequadamente true/false em vez de 'SIM'/'NAO')
-
-  return result;
-}
-
-/**
- * Prepara dados vindos do frontend/app para inserção no Postgres:
- * - 'SIM'/'NAO' → boolean
- * - String JSON → objeto para colunas JSONB
- * - '' → null para colunas UUID (FK)
- * - status/origem: normaliza para maiúsculas (valores enum)
- */
-
-function _prepararParaDB(nomeColecao, dados) {
-  const result = { ...dados };
-
-  // 🧹 FAXINEIRO UNIVERSAL (Limpa campos vazios)
-  for (const key of Object.keys(result)) {
-    if (typeof result[key] === 'string' && result[key].trim() === '') {
-      result[key] = null;
-    }
-  }
-
-  // 1. Normalização de status e origem (garante maiúsculas para validação)
-  if (result['status']) result['status'] = result['status'].toString().toUpperCase();
-  if (result['origem']) result['origem'] = result['origem'].toString().toUpperCase();
-
-  // 2. 'SIM'/'NAO'/'NÃO' → boolean nativo (o frontend envia strings, o Postgres exige boolean)
-  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
-  for (const field of boolFields) {
-    if (field in result && typeof result[field] !== 'boolean') {
-      const s = (result[field] || '').toString().toUpperCase().trim()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove acentos (NÃO → NAO)
-      result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
-    }
-  }
-
-  // 3. JSONB: parse strings JSON
-  for (const field of ['cliente_info', 'itens_comprados']) {
-    if (field in result && typeof result[field] === 'string') {
-      if (!result[field]) {
-        result[field] = field === 'itens_comprados' ? [] : null;
-      } else {
-        try { result[field] = JSON.parse(result[field]); } catch { }
-      }
-    }
-  }
-
-  // 3b. Campos que existem só no frontend e NÃO têm coluna no banco → remover antes do insert
-  const _CAMPOS_VIRTUAIS = {
-    'acai-modelos': ['limites_json'],
-  };
-  for (const campo of (_CAMPOS_VIRTUAIS[nomeColecao] || [])) {
-    delete result[campo];
-  }
-
-  // 4. UUID FK vazio → null
-  for (const field of ['id_tara', 'categoria_id']) {
-    if (field in result && (result[field] === '' || result[field] === undefined)) {
-      result[field] = null;
-    }
-  }
-
-  // 5. TRADUTOR DE DATA COM HORA (Evita bug de conversão "2026 15:30-04-30")
-  for (const field of ['validade', 'data_hora', 'data_cadastro']) {
-    if (result[field] && typeof result[field] === 'string' && result[field].includes('/')) {
-      const [dataStr, horaStr] = result[field].split(' ');
-      const partes = dataStr.split('/');
-      if (partes.length === 3) {
-        const dataIso = `${partes[2]}-${partes[1]}-${partes[0]}`;
-        result[field] = horaStr ? `${dataIso} ${horaStr}` : dataIso;
-      }
-    }
-  }
-
-  return result;
-}
-
-// ══════════════════════════════════════════════════════════
-// HELPERS SUPABASE — SUBSTITUEM OS HELPERS DO FIRESTORE
-// ══════════════════════════════════════════════════════════
-
-/**
- * Lê todos os registros de uma tabela filtrados por loja_id.
- * Equivalente ao lerSubcolecao() do Firestore.
- */
-// Limite seguro por coleção (ajuste conforme necessidade real do negócio)
-const _LIMITE_COLECAO = {
-  'pedidos':           500,
-  'clientes':          1000,
-  'cardapio':          500,
-  'acai-ingredientes': 300,
-  'cupons':            200,
-};
-const _LIMITE_DEFAULT = 500;
-
-async function lerSubcolecao(lojaId, nomeColecao) {
-  const tabela = _TABLE_MAP[nomeColecao];
-  if (!tabela) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
-
-  const limite = _LIMITE_COLECAO[nomeColecao] ?? _LIMITE_DEFAULT;
-
+async function lerTabela(lojaId, nomeColecao) {
+  const mapa = _TABLE_MAP[nomeColecao];
+  if (!mapa) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
   const { data, error } = await supabase
-    .from(tabela)
-    .select('*')
-    .eq('loja_id', lojaId)
-    .limit(limite);
-
-  if (error) throw new Error(`[lerSubcolecao:${nomeColecao}] ${error.message}`);
-  return (data || []).map(row => _normalizarRow(nomeColecao, row));
+    .from(mapa.tabela).select('*').eq('loja_id', lojaId);
+  if (error) throw new Error(`[lerTabela:${mapa.tabela}] ${error.message}`);
+  return data || [];
 }
 
-/**
- * Lê o documento de configurações da loja (relação 1:1, loja_id é a PK).
- * Equivalente ao getConfiguracoes() do Firestore.
- */
+/** Lê as configurações da loja (1 linha por loja). */
 async function getConfiguracoes(lojaId) {
   const { data, error } = await supabase
-    .from('configuracoes')
-    .select('*')
-    .eq('loja_id', lojaId)
-    .maybeSingle();
-
+    .from('configuracoes').select('*').eq('loja_id', lojaId).maybeSingle();
   if (error) throw new Error(`[getConfiguracoes] ${error.message}`);
-  return data ? _normalizarRow('configuracoes', data) : {};
+  return data || {};
 }
 
 /**
- * Salva (INSERT ou UPDATE) um registro em uma tabela do schema acaiteria.
- * - Se não tiver ID, insere e deixa o Postgres gerar o UUID.
- * - Se já tiver ID, atualiza o registro filtrando também por loja_id.
- * - Para cupons (PK composta), usa upsert.
- * Equivalente ao salvarRegistro() do Firestore.
+ * Salva (INSERT ou UPDATE) um registro em uma tabela.
+ * Se o campo PK estiver vazio/ausente → INSERT (UUID gerado pelo banco).
+ * Se o campo PK estiver preenchido    → UPDATE via upsert.
  */
-async function salvarRegistro(lojaId, nomeColecao, dadosObj, campoId) {
-  const tabela = _TABLE_MAP[nomeColecao];
-  if (!tabela) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
+async function salvarRegistro(lojaId, nomeColecao, dadosObj) {
+  const mapa = _TABLE_MAP[nomeColecao];
+  if (!mapa) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
+  const { tabela, pk } = mapa;
 
-  const id     = (dadosObj[campoId] || '').toString().trim();
+  const id    = dadosObj[pk] ? dadosObj[pk].toString().trim() : '';
   const ehNovo = !id;
-
-  // Prepara payload com loja_id e conversões de tipos
-  const dbData = _prepararParaDB(nomeColecao, { ...dadosObj, loja_id: lojaId });
-
-  // Cupons têm PK composta (codigo_cupom, loja_id) → sempre upsert
-  if (nomeColecao === 'cupons') {
-    if (!dbData['codigo_cupom']?.toString().trim())
-      return { sucesso: false, mensagem: 'Código do cupom é obrigatório.' };
-
-    const { error } = await supabase
-      .from(tabela)
-      .upsert(dbData, { onConflict: 'codigo_cupom,loja_id' });
-
-    if (error) throw new Error(`[salvarCupom] ${error.message}`);
-    invalidarCacheCardapio(lojaId);
-    return { sucesso: true, mensagem: 'Cupom salvo!', id: dbData['codigo_cupom'] };
-  }
+  const dados  = { ...dadosObj, loja_id: lojaId };
 
   if (ehNovo) {
-    // Remove campo PK vazio → Postgres gera UUID automaticamente
-    delete dbData[campoId];
-
-    const { data, error } = await supabase
-      .from(tabela)
-      .insert(dbData)
-      .select(campoId)
-      .single();
-
-    if (error) throw new Error(`[salvarRegistro:insert:${nomeColecao}] ${error.message}`);
-
-    if (_CACHE_COLS.has(nomeColecao)) invalidarCacheCardapio(lojaId);
-    return { sucesso: true, mensagem: 'Salvo!', id: data[campoId] };
-
+    // Remove PK para deixar o banco gerar o UUID
+    delete dados[pk];
+    const { data, error } = await supabase.from(tabela).insert(dados).select(pk).single();
+    if (error) throw new Error(`[salvarRegistro:insert:${tabela}] ${error.message}`);
+    if (_CACHE_COLS.has(tabela)) invalidarCacheCardapio(lojaId);
+    return { sucesso: true, mensagem: 'Salvo!', id: data[pk] };
   } else {
-    // Remove PK e loja_id do payload de update (são usados como filtro)
-    const updateData = { ...dbData };
-    delete updateData[campoId];
-    delete updateData['loja_id'];
-
     const { error } = await supabase
-      .from(tabela)
-      .update(updateData)
-      .eq(campoId, id)
-      .eq('loja_id', lojaId);
-
-    if (error) throw new Error(`[salvarRegistro:update:${nomeColecao}] ${error.message}`);
-
-    if (_CACHE_COLS.has(nomeColecao)) invalidarCacheCardapio(lojaId);
+      .from(tabela).update(dados).eq(pk, id).eq('loja_id', lojaId);
+    if (error) throw new Error(`[salvarRegistro:update:${tabela}] ${error.message}`);
+    if (_CACHE_COLS.has(tabela)) invalidarCacheCardapio(lojaId);
     return { sucesso: true, mensagem: 'Atualizado!', id };
   }
 }
 
 /**
- * Exclui um registro de uma tabela filtrando por ID e loja_id.
- * Equivalente ao deletarRegistro() do Firestore.
+ * Exclui um registro de uma tabela.
  */
 async function deletarRegistro(lojaId, nomeColecao, idValor) {
-  const tabela  = _TABLE_MAP[nomeColecao];
-  const campoId = _PK_MAP[nomeColecao];
-  if (!tabela || !campoId) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
+  const mapa = _TABLE_MAP[nomeColecao];
+  if (!mapa) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
+  const { tabela, pk } = mapa;
 
-  // Verifica existência antes de deletar
-  const { data: existente, error: errBusca } = await supabase
-    .from(tabela)
-    .select(campoId)
-    .eq(campoId, idValor.toString())
-    .eq('loja_id', lojaId)
-    .maybeSingle();
+  const { error, count } = await supabase
+    .from(tabela).delete({ count: 'exact' })
+    .eq(pk, idValor).eq('loja_id', lojaId);
 
-  if (errBusca) throw new Error(`[deletarRegistro:check:${nomeColecao}] ${errBusca.message}`);
-  if (!existente) return { sucesso: false, mensagem: 'Registro não encontrado.' };
-
-  const { error } = await supabase
-    .from(tabela)
-    .delete()
-    .eq(campoId, idValor.toString())
-    .eq('loja_id', lojaId);
-
-  if (error) throw new Error(`[deletarRegistro:delete:${nomeColecao}] ${error.message}`);
-  if (_CACHE_COLS.has(nomeColecao)) invalidarCacheCardapio(lojaId);
+  if (error) throw new Error(`[deletarRegistro:${tabela}] ${error.message}`);
+  if (count === 0) return { sucesso: false, mensagem: 'Registro não encontrado.' };
+  if (_CACHE_COLS.has(tabela)) invalidarCacheCardapio(lojaId);
   return { sucesso: true, mensagem: 'Excluído com sucesso!' };
 }
 
@@ -600,19 +281,12 @@ async function deletarRegistro(lojaId, nomeColecao, idValor) {
 // MIDDLEWARES
 // ══════════════════════════════════════════════════════════
 
-/**
- * MW 1 — Autenticação JWT.
- * Injeta req.usuario = { loja_id, id, nome, cargo }
- */
+/** MW 1 — Autenticação JWT. Injeta req.usuario = { loja_id, id, nome, cargo }. */
 function autenticar(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ')
-    ? authHeader.slice(7) : null;
-
-  if (!token) {
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token)
     return res.status(401).json({ sucesso: false, mensagem: 'Token não fornecido.' });
-  }
-
   try {
     req.usuario = jwt.verify(token, JWT_SECRET);
     next();
@@ -620,100 +294,75 @@ function autenticar(req, res, next) {
     return res.status(401).json({
       sucesso: false,
       mensagem: e.name === 'TokenExpiredError'
-        ? 'Sessão expirada. Faça login novamente.'
-        : 'Token inválido.',
+        ? 'Sessão expirada. Faça login novamente.' : 'Token inválido.',
     });
   }
 }
 
-/**
- * MW 2 — Verificação de cargo.
- * Deve ser usado APÓS autenticar().
- */
+/** MW 2 — Verificação de cargo. Deve ser usado APÓS autenticar(). */
 function exigirCargo(...cargosPermitidos) {
   return (req, res, next) => {
-    if (!req.usuario) {
+    if (!req.usuario)
       return res.status(401).json({ sucesso: false, mensagem: 'Não autenticado.' });
-    }
-    if (!cargosPermitidos.includes(req.usuario.cargo)) {
+    if (!cargosPermitidos.includes(req.usuario.cargo))
       return res.status(403).json({
         sucesso: false,
         mensagem: `Acesso negado. Requer: ${cargosPermitidos.join(' ou ')}.`,
       });
-    }
     next();
   };
 }
 
-/**
- * MW 3 — Isolamento de loja.
- * Garante que o usuário logado só acessa sua própria loja.
- * Deve ser usado APÓS autenticar().
- */
+/** MW 3 — Isolamento multi-tenant. Garante que o usuário só acessa sua loja. */
 function verificarLojaAcesso(req, res, next) {
   const lojaIdRota = req.params.loja_id;
   if (!lojaIdRota) return next();
-
-  if (req.usuario.loja_id !== lojaIdRota) {
+  if (req.usuario.loja_id !== lojaIdRota)
     return res.status(403).json({
       sucesso: false,
       mensagem: 'Acesso negado. Esta loja não pertence à sua conta.',
     });
-  }
   next();
 }
 
 /**
- * MW 4 — Status da loja (SaaS gate).
- * Bloqueia qualquer requisição se a loja estiver com status 'bloqueado'.
- * Funciona em rotas autenticadas e públicas (cardápio online, pedidos online).
+ * MW 4 — SaaS Gate: verifica se a loja está ativa.
+ * Usa cache de 5 min para não consultar o banco em cada requisição.
  */
 async function verificarStatusLoja(req, res, next) {
   const lojaId = req.params.loja_id || (req.usuario && req.usuario.loja_id);
   if (!lojaId) return next();
 
   try {
-    // 1. Verifica o Cache para não afogar o Banco de Dados
-    const cached = _cacheStatusLoja.get(lojaId);
-    let status = 'ativo';
+    let status = _getStatusCache(lojaId);
 
-    if (cached && (Date.now() - cached.ts < STATUS_TTL_MS)) {
-      status = cached.status;
-    } else {
-      // 2. Se não estiver no cache (ou expirou), vai ao banco
-      const { data: loja, error } = await supabase
-        .from('lojas')
-        .select('status')
-        .eq('id', lojaId)
-        .maybeSingle();
-
+    if (status === undefined) {
+      const { data, error } = await supabase
+        .from('lojas').select('status').eq('id', lojaId).maybeSingle();
       if (error) throw error;
-      if (!loja) return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada.' });
-
-      status = (loja.status || 'ativo').toLowerCase();
-      _cacheStatusLoja.set(lojaId, { status, ts: Date.now() });
+      if (!data) return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada.' });
+      status = (data.status || 'ativo').toLowerCase();
+      _setStatusCache(lojaId, status);
     }
 
-    if (status === 'bloqueado') {
+    if (status === 'bloqueado')
       return res.status(403).json({
         sucesso: false,
         mensagem: 'Acesso bloqueado. Verifique o pagamento da sua assinatura ou contate o suporte.',
       });
-    }
+
     next();
   } catch (err) {
     console.error('[verificarStatusLoja]', err);
-    return res.status(500).json({ sucesso: false, mensagem: 'Erro interno ao verificar status da loja.' });
+    return res.status(500).json({ sucesso: false, mensagem: 'Erro ao verificar status da loja.' });
   }
 }
 
-/** Conjunto de middlewares padrão para rotas protegidas da loja. */
-const guardLoja = [autenticar, verificarLojaAcesso, verificarStatusLoja];
-
-/** Conjunto de middlewares para rotas que exigem cargo específico. */
+/** Pilha padrão de MWs para rotas protegidas da loja. */
+const guardLoja  = [autenticar, verificarLojaAcesso, verificarStatusLoja];
 const guardCargo = (...cargos) => [...guardLoja, exigirCargo(...cargos)];
 
-/** Wrapper padrão: executa handler async e retorna JSON. */
+/** Wrapper async: executa handler e retorna JSON. */
 const handler = fn => async (req, res) => {
   try {
     const resultado = await fn(req, res);
@@ -731,120 +380,85 @@ const handler = fn => async (req, res) => {
 // ══════════════════════════════════════════════════════════
 
 async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
-  if (!lojaId || !usuarioDigitado || !senhaDigitada) {
+  if (!lojaId || !usuarioDigitado || !senhaDigitada)
     return { sucesso: false, mensagem: 'Loja, usuário e senha são obrigatórios.' };
-  }
 
   const loginNorm = usuarioDigitado.toString().trim().toLowerCase();
 
-  // Busca usuario por login (case-insensitive) dentro da loja
-  const { data: rows, error } = await supabase
+  const { data: usuario, error } = await supabase
     .from('usuarios')
     .select('*')
     .eq('loja_id', lojaId)
-    .ilike('login', loginNorm)
-    .limit(1);
-
-  if (error) throw new Error(`[validarLogin] ${error.message}`);
-  if (!rows || rows.length === 0)
-    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
-
-  const d = rows[0];
-
-  // Verifica se a senha está em bcrypt ou ainda em texto puro (migração gradual)
-  const senhaNoBanco = (d.senha || '').toString();
-  const ehBcrypt = senhaNoBanco.startsWith('$2b$') || senhaNoBanco.startsWith('$2a$');
-
-  let senhaValida = false;
-  if (ehBcrypt) {
-    senhaValida = await bcrypt.compare(senhaDigitada.toString(), senhaNoBanco);
-  } else {
-    // Senha ainda em texto puro → compara e já aproveita para migrar
-    senhaValida = senhaNoBanco === senhaDigitada.toString();
-    if (senhaValida) {
-      // Migra automaticamente para bcrypt na próxima vez que o usuário logar
-      const hash = await bcrypt.hash(senhaDigitada.toString(), 12);
-      await supabase
-        .from('usuarios')
-        .update({ senha: hash })
-        .eq('id_usuario', d.id_usuario)
-        .eq('loja_id', lojaId);
-    }
-  }
-
-  if (!senhaValida) {
-    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
-  }
-
-// Na criação/atualização de usuário (em salvarUsuario), hash antes de salvar:
-// dados.senha = await bcrypt.hash(dados.senha, 12);
-
-  // Status do usuário (Postgres armazena 'ativo'/'inativo')
-  if ((d.status || '').toString().toLowerCase() !== 'ativo') {
-    return { sucesso: false, mensagem: 'Acesso bloqueado. Contate a gerência.' };
-  }
-
-  // Verifica se a loja em si está ativa
-  const { data: loja } = await supabase
-    .from('lojas')
-    .select('status')
-    .eq('id', lojaId)
+    .eq('login', loginNorm)
     .maybeSingle();
 
-  if (!loja) return { sucesso: false, mensagem: 'Loja não encontrada.' };
-  const statusLoja = (loja.status || 'ativo').toLowerCase();
-  if (statusLoja === 'bloqueado') {
-    return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
+  if (error || !usuario)
+    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
+
+  if ((usuario.senha || '') !== senhaDigitada.toString())
+    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
+
+  if ((usuario.status || '').toLowerCase() !== 'ativo')
+    return { sucesso: false, mensagem: 'Acesso bloqueado. Contate a gerência.' };
+
+  // Verifica se a loja em si está ativa (usa cache)
+  let statusLoja = _getStatusCache(lojaId);
+  if (statusLoja === undefined) {
+    const { data: loja } = await supabase
+      .from('lojas').select('status').eq('id', lojaId).maybeSingle();
+    if (!loja) return { sucesso: false, mensagem: 'Loja não encontrada.' };
+    statusLoja = (loja.status || 'ativo').toLowerCase();
+    _setStatusCache(lojaId, statusLoja);
   }
 
-  const cargo = (d.cargo || '').toString();
+  if (statusLoja === 'bloqueado')
+    return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
+
+  const cargo = usuario.cargo || '';
   return {
-    sucesso:     true,
-    id_usuario:  d.id_usuario,   // ← ADICIONAR esta linha
+    sucesso:    true,
     cargo,
-    nome:        (d.nome || '').toString(),
-    foto_perfil: (d.foto_perfil || '').toString(),
-    permissoes:  getPermissoesCargo(cargo),
+    nome:       usuario.nome       || '',
+    fotoPerfil: usuario.foto_perfil || '',
+    permissoes: getPermissoesCargo(cargo),
   };
 }
 
 async function validarSupervisorOuAcima(lojaId, login, senha) {
   const auth = await validarLogin(lojaId, login, senha);
   if (!auth.sucesso) return { autorizado: false, mensagem: auth.mensagem };
-
-  const cargosAutorizados = ['Dono', 'Gerente', 'Supervisor'];
-  if (!cargosAutorizados.includes(auth.cargo)) {
+  if (!['Dono','Gerente','Supervisor'].includes(auth.cargo))
     return { autorizado: false, mensagem: `Cargo "${auth.cargo}" não tem autoridade para esta ação.` };
-  }
   return { autorizado: true, nome: auth.nome, cargo: auth.cargo, mensagem: 'Autorizado.' };
 }
 
 
 // ══════════════════════════════════════════════════════════
-// CARGAS DE DADOS
+// CARGAS DE DADOS (carregamento inicial do painel)
 // ══════════════════════════════════════════════════════════
 
 async function getDadosPainelGeral(lojaId) {
   const [
-    usuarios, itensFixos, acaiCategorias, acaiIngredientes,
-    acaiModelos, bairros, cupons, taras, configuracoes,
+    usuarios, cardapio, acai_categorias, acai_ingredientes,
+    acai_modelos, bairros, cupons, taras, configuracoes,
     pedidosDia, deliveryAtivo,
   ] = await Promise.all([
-    lerSubcolecao(lojaId, 'usuarios'),
-    lerSubcolecao(lojaId, 'cardapio'),
-    lerSubcolecao(lojaId, 'acai-categorias'),
-    lerSubcolecao(lojaId, 'acai-ingredientes'),
-    lerSubcolecao(lojaId, 'acai-modelos'),
-    lerSubcolecao(lojaId, 'bairros'),
-    lerSubcolecao(lojaId, 'cupons'),
-    lerSubcolecao(lojaId, 'taras'),
+    lerTabela(lojaId, 'usuarios'),
+    lerTabela(lojaId, 'cardapio'),
+    lerTabela(lojaId, 'acai-categorias'),
+    lerTabela(lojaId, 'acai-ingredientes'),
+    lerTabela(lojaId, 'acai-modelos'),
+    lerTabela(lojaId, 'bairros'),
+    lerTabela(lojaId, 'cupons'),
+    lerTabela(lojaId, 'taras'),
     getConfiguracoes(lojaId),
     getPedidosDoDia(lojaId),
     getDeliveryEmAndamento(lojaId),
   ]);
+
   return {
-    usuarios, itensFixos, acaiCategorias, acaiIngredientes,
-    acaiModelos, bairros, cupons, taras, configuracoes,
+    usuarios, cardapio, acai_categorias, acai_ingredientes,
+    acai_modelos, bairros, cupons, taras, configuracoes,
     pedidosDia, deliveryAtivo,
   };
 }
@@ -852,106 +466,67 @@ async function getDadosPainelGeral(lojaId) {
 async function getDadosConfig(lojaId) {
   const [configuracoes, usuarios, bairros, cupons, taras] = await Promise.all([
     getConfiguracoes(lojaId),
-    lerSubcolecao(lojaId, 'usuarios'),
-    lerSubcolecao(lojaId, 'bairros'),
-    lerSubcolecao(lojaId, 'cupons'),
-    lerSubcolecao(lojaId, 'taras'),
+    lerTabela(lojaId, 'usuarios'),
+    lerTabela(lojaId, 'bairros'),
+    lerTabela(lojaId, 'cupons'),
+    lerTabela(lojaId, 'taras'),
   ]);
   return { configuracoes, usuarios, bairros, cupons, taras };
 }
 
 async function getDadosMonteAcai(lojaId) {
-  const [acaiModelos, acaiCategorias, acaiIngredientes] = await Promise.all([
-    lerSubcolecao(lojaId, 'acai-modelos'),
-    lerSubcolecao(lojaId, 'acai-categorias'),
-    lerSubcolecao(lojaId, 'acai-ingredientes'),
+  const [acai_modelos, acai_categorias, acai_ingredientes] = await Promise.all([
+    lerTabela(lojaId, 'acai-modelos'),
+    lerTabela(lojaId, 'acai-categorias'),
+    lerTabela(lojaId, 'acai-ingredientes'),
   ]);
-  return { acaiModelos, acaiCategorias, acaiIngredientes };
+  return { acai_modelos, acai_categorias, acai_ingredientes };
 }
 
+/** Retorna o pacote público do cardápio, usando cache em memória. */
 async function getCardapioClienteCache(lojaId) {
   const cached = _getCacheCardapio(lojaId);
   if (cached) return cached;
 
   const [config, prontos, tamanhos, categorias, ingredientes, bairros] = await Promise.all([
     getConfiguracoes(lojaId),
-    lerSubcolecao(lojaId, 'cardapio'),
-    lerSubcolecao(lojaId, 'acai-modelos'),
-    lerSubcolecao(lojaId, 'acai-categorias'),
-    lerSubcolecao(lojaId, 'acai-ingredientes'),
-    lerSubcolecao(lojaId, 'bairros'),
+    lerTabela(lojaId, 'cardapio'),
+    lerTabela(lojaId, 'acai-modelos'),
+    lerTabela(lojaId, 'acai-categorias'),
+    lerTabela(lojaId, 'acai-ingredientes'),
+    lerTabela(lojaId, 'bairros'),
   ]);
 
   const pacote = {
     configuracoes: {
-      url_logo:                config['url_logo']                || '',
-      hora_abre:               config['hora_abre']               || '',
-      hora_fecha:              config['hora_fecha']              || '',
-      status_loja:             config['status_loja']             || '',
-      nome_loja:               config['nome_loja']               || '',
-      whatsapp_numero:         config['whatsapp_numero']         || '',
-      retirada_loja_ativo:     config['retirada_loja_ativo']     || '',
-      endereco_loja:           config['endereco_loja']           || '',
-      instagram_url:           config['instagram_url']           || '',
-      whatsapp_link:           config['whatsapp_link']           || '',
-      facebook_url:            config['facebook_url']            || '',
-      mostrar_acai_rapido_pdv: config['mostrar_acai_rapido_pdv'] || 'SIM',
-      preco_kg:                config['preco_kg']                || '39.90',
-      autoimprimir_balcao:     config['autoimprimir_balcao']     || 'NAO',
-      autoimprimir_delivery:   config['autoimprimir_delivery']   || 'NAO',
-      frete_gratis:            config['frete_gratis']            || '0',
-      tempo_entrega:           config['tempo_entrega']           || '',
+      url_logo:               config.url_logo               || '',
+      hora_abre:              config.hora_abre              || '',
+      hora_fecha:             config.hora_fecha             || '',
+      status_loja:            config.status_loja            || '',
+      nome_loja:              config.nome_loja              || '',
+      whatsapp_numero:        config.whatsapp_numero        || '',
+      retirada_loja_ativo:    config.retirada_loja_ativo    ?? false,
+      endereco_loja:          config.endereco_loja          || '',
+      instagram_url:          config.instagram_url          || '',
+      whatsapp_link:          config.whatsapp_link          || '',
+      facebook_url:           config.facebook_url           || '',
+      mostrar_acai_rapido_pdv:config.mostrar_acai_rapido_pdv ?? true,
+      preco_kg:               parseFloat(config.preco_kg    || 39.90),
+      autoimprimir_balcao:    config.autoimprimir_balcao    ?? false,
+      autoimprimir_delivery:  config.autoimprimir_delivery  ?? false,
+      frete_gratis:           parseFloat(config.frete_gratis || 0),
+      tempo_entrega:          config.tempo_entrega          || '',
     },
-    prontos:      prontos.filter(i => i.disponivel === 'SIM' && (i.mostrar_online || 'SIM') !== 'NAO'),
-    tamanhos:     tamanhos.filter(m => m.disponivel === 'SIM'),
+    // Filtra com booleans nativos — zero tradução "SIM"/"NÃO"
+    prontos:      prontos.filter(i => i.disponivel === true && i.mostrar_online !== false),
+    tamanhos:     tamanhos.filter(m => m.disponivel === true),
     categorias,
-    ingredientes: ingredientes.filter(i => i.disponivel === 'SIM'),
-    bairros:      bairros.filter(b => b.disponivel === 'SIM'),
+    ingredientes: ingredientes.filter(i => i.disponivel === true),
+    bairros:      bairros.filter(b => b.disponivel === true),
   };
 
   _setCacheCardapio(lojaId, pacote);
   return pacote;
-}
-
-async function getDeliveryEmAndamento(lojaId) {
-  // Pré-filtra 7 dias no banco para evitar varredura total
-  const limite7d = new Date();
-  limite7d.setDate(limite7d.getDate() - 7);
-  limite7d.setHours(0, 0, 0, 0);
-
-  const { data, error } = await supabase
-    .from('pedidos')
-    .select('*')
-    .eq('loja_id', lojaId)
-    .in('origem', ['DELIVERY', 'ONLINE'])
-    .gte('data_hora', limite7d.toISOString());
-
-  if (error) throw new Error(`[getDeliveryEmAndamento] ${error.message}`);
-
-  const limiteHoje = new Date();
-  limiteHoje.setHours(0, 0, 0, 0);
-
-  return (data || [])
-    .map(p => _normalizarTimestamps({ ...p }))
-    .filter(p => {
-      const st = (p.status || '').toUpperCase();
-      const dt = _toDate(p.data_hora);
-
-      if (st === 'CANCELADO') return false;
-      if (st === 'ENTREGUE') {
-        // Mantém os entregues de HOJE para somar na carteira do entregador
-        return dt && dt >= limiteHoje;
-      }
-      return true; // Já filtrado pelos 7 dias no banco
-    });
-}
-
-async function getDadosPolling(lojaId) {
-  const [pedidosDia, deliveryAtivo] = await Promise.all([
-    getPedidosDoDia(lojaId),
-    getDeliveryEmAndamento(lojaId),
-  ]);
-  return { pedidosDia, deliveryAtivo };
 }
 
 
@@ -971,10 +546,9 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
   dtIni.setHours(0,  0,  0,   0);
   dtFim.setHours(23, 59, 59, 999);
 
-  // Filtra por intervalo de datas diretamente no Postgres (usa o índice)
-  const { data, error } = await supabase
-    .from('pedidos')
-    .select('*')
+  // Filtragem por intervalo diretamente no banco — mais eficiente que carregar tudo
+  const { data: pedidos, error } = await supabase
+    .from('pedidos').select('*')
     .eq('loja_id', lojaId)
     .gte('data_hora', dtIni.toISOString())
     .lte('data_hora', dtFim.toISOString())
@@ -982,39 +556,36 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
 
   if (error) throw new Error(`[getPedidosPorPeriodo] ${error.message}`);
 
-  const pedidos  = [];
-  let totalDia   = 0, totalDesc = 0;
-  const contOrigem = { BALCAO: 0, DELIVERY: 0, ONLINE: 0 };
-  const contPgto = {}, contStatus = {};
+  const lista = pedidos || [];
+  let totalDia = 0, totalDesc = 0;
+  const contOrigem  = { BALCAO: 0, DELIVERY: 0, ONLINE: 0 };
+  const contPgto    = {}, contStatus = {};
 
-  for (const p of (data || [])) {
-    // Normaliza timestamps para o formato esperado pelo frontend
-    const row = _normalizarTimestamps({ ...p });
-    pedidos.push(row);
-
-    const tot    = parseFloat(p.total_final || 0);
-    const desc   = parseFloat(p.desconto    || 0);
-    const origem = (p.origem           || '').toUpperCase();
+  for (const p of lista) {
+    const status = (p.status || '').toUpperCase();
+    const origem = (p.origem || '').toUpperCase();
     const pgto   = (p.metodo_pagamento || '').toUpperCase();
-    const status = (p.status           || '').toUpperCase();
 
-    if (status !== 'CANCELADO') { totalDia += tot; totalDesc += desc; }
+    if (status !== 'CANCELADO') {
+      totalDia  += parseFloat(p.total_final || 0);
+      totalDesc += parseFloat(p.desconto    || 0);
+    }
     contOrigem[origem] = (contOrigem[origem] || 0) + 1;
     contPgto[pgto]     = (contPgto[pgto]     || 0) + 1;
     contStatus[status] = (contStatus[status]  || 0) + 1;
   }
 
-  const qtdAtivos = pedidos.filter(p => (p.status || '').toUpperCase() !== 'CANCELADO').length;
+  const qtdAtivos = lista.filter(p => (p.status||'').toUpperCase() !== 'CANCELADO').length;
 
   return {
-    pedidos,
+    pedidos: lista,
     resumo: {
       totalVendas:    Math.round(totalDia  * 100) / 100,
       totalDescontos: Math.round(totalDesc * 100) / 100,
       ticketMedio:    qtdAtivos > 0 ? Math.round((totalDia / qtdAtivos) * 100) / 100 : 0,
-      qtdPedidos:     pedidos.length,
+      qtdPedidos:     lista.length,
       porOrigem: contOrigem, porPagamento: contPgto, porStatus: contStatus,
-      periodo:   { inicio: dataInicio, fim: dataFim },
+      periodo: { inicio: dataInicio, fim: dataFim },
     },
   };
 }
@@ -1028,19 +599,19 @@ async function getRelatorioAvancado(lojaId, params) {
   const base = await getPedidosPorPeriodo(lojaId, params.dataInicio, params.dataFim);
   let pedidos = base.pedidos;
 
-  if (params.pagamento?.trim()) pedidos = pedidos.filter(p => (p.metodo_pagamento || '').toUpperCase() === params.pagamento.toUpperCase());
-  if (params.operador?.trim())  pedidos = pedidos.filter(p => (p.operador || '').toLowerCase().includes(params.operador.toLowerCase()));
-  if (params.origem?.trim())    pedidos = pedidos.filter(p => (p.origem || '').toUpperCase() === params.origem.toUpperCase());
-  if (params.status?.trim())    pedidos = pedidos.filter(p => (p.status || '').toUpperCase() === params.status.toUpperCase());
+  if (params.pagamento?.trim()) pedidos = pedidos.filter(p => (p.metodo_pagamento||'').toUpperCase() === params.pagamento.toUpperCase());
+  if (params.operador?.trim())  pedidos = pedidos.filter(p => (p.operador||'').toLowerCase().includes(params.operador.toLowerCase()));
+  if (params.origem?.trim())    pedidos = pedidos.filter(p => (p.origem||'').toUpperCase() === params.origem.toUpperCase());
+  if (params.status?.trim())    pedidos = pedidos.filter(p => (p.status||'').toUpperCase() === params.status.toUpperCase());
 
   let totalVendas = 0, totalDescontos = 0;
   const porOrigem = {}, porPagamento = {}, porStatus = {}, porOperador = {};
 
   for (const p of pedidos) {
-    const st = (p.status           || '').toUpperCase();
-    const og = (p.origem           || '').toUpperCase();
-    const pg = (p.metodo_pagamento || '').toUpperCase();
-    const op = (p.operador         || '').toString();
+    const st = (p.status||'').toUpperCase();
+    const og = (p.origem||'').toUpperCase();
+    const pg = (p.metodo_pagamento||'').toUpperCase();
+    const op = (p.operador||'').toString();
     if (st !== 'CANCELADO') {
       totalVendas    += parseFloat(p.total_final || 0);
       totalDescontos += parseFloat(p.desconto    || 0);
@@ -1051,7 +622,7 @@ async function getRelatorioAvancado(lojaId, params) {
     porOperador[op]  = (porOperador[op]  || 0) + 1;
   }
 
-  const qtdAtivos = pedidos.filter(p => (p.status || '').toUpperCase() !== 'CANCELADO').length;
+  const qtdAtivos = pedidos.filter(p => (p.status||'').toUpperCase() !== 'CANCELADO').length;
 
   return {
     pedidos,
@@ -1070,17 +641,15 @@ async function buscarPedidos(lojaId, query) {
   if (!query?.toString().trim()) return [];
   const q = query.toString().trim().toLowerCase();
 
-  const limite60 = new Date();
-  limite60.setDate(limite60.getDate() - 60);
-  limite60.setHours(0, 0, 0, 0);
+  const limite = new Date();
+  limite.setDate(limite.getDate() - 60);
 
   const { data, error } = await supabase
-    .from('pedidos')
-    .select('*')
+    .from('pedidos').select('*')
     .eq('loja_id', lojaId)
-    .gte('data_hora', limite60.toISOString())
+    .gte('data_hora', limite.toISOString())
     .order('data_hora', { ascending: false })
-    .limit(200); // Pré-limita no banco para não sobrecarregar
+    .limit(200);
 
   if (error) throw new Error(`[buscarPedidos] ${error.message}`);
 
@@ -1088,16 +657,14 @@ async function buscarPedidos(lojaId, query) {
   for (const p of (data || [])) {
     if (resultado.length >= 50) break;
 
-    const idStr    = (p.id_venda || '').toString().toLowerCase();
-    // JSONB vem como objeto do Postgres → serializa para busca textual
-    const cliStr   = JSON.stringify(p.cliente_info    || {}).toLowerCase();
-    const itensStr = JSON.stringify(p.itens_comprados || []).toLowerCase();
+    const idStr    = (p.id_venda || '').toLowerCase();
+    // cliente_info é JSONB — Supabase já retorna como objeto
+    const cliStr   = JSON.stringify(p.cliente_info  || {}).toLowerCase();
+    const itensStr = JSON.stringify(p.itens_comprados|| []).toLowerCase();
 
-    if (idStr.includes(q) || cliStr.includes(q) || itensStr.includes(q)) {
-      resultado.push(_normalizarTimestamps({ ...p }));
-    }
+    if (idStr.includes(q) || cliStr.includes(q) || itensStr.includes(q))
+      resultado.push(p);
   }
-
   return resultado;
 }
 
@@ -1109,54 +676,41 @@ async function getAcompanhamentoPedido(lojaId, query) {
   const qNorm   = q.replace(/\s+/g, '').toLowerCase();
   const qDigits = q.replace(/\D/g, '');
 
-  const limiteHoje = new Date();
-  limiteHoje.setHours(0, 0, 0, 0);
+  const limiteHoje = new Date(); limiteHoje.setHours(0, 0, 0, 0);
+  const limite7d   = new Date(); limite7d.setDate(limite7d.getDate() - 7);
 
-  // Busca por ID do pedido (parcial, últimos 30 dias)
-  const limite30 = new Date();
-  limite30.setDate(limite30.getDate() - 30);
-
-  const { data: porId } = await supabase
-    .from('pedidos')
-    .select('*')
+  // Busca por id_venda (últimos 7 dias) ou por telefone no JSONB (apenas hoje)
+  const { data, error } = await supabase
+    .from('pedidos').select('*')
     .eq('loja_id', lojaId)
-    .ilike('id_venda', `%${q}%`)
-    .gte('data_hora', limite30.toISOString())
-    .limit(5);
+    .gte('data_hora', limite7d.toISOString())
+    .order('data_hora', { ascending: false });
 
-  // Busca por telefone no campo JSONB (somente pedidos de hoje)
-  let porTelefone = [];
-  if (qDigits.length >= 7) {
-    const { data: telData } = await supabase
-      .from('pedidos')
-      .select('*')
-      .eq('loja_id', lojaId)
-      .gte('data_hora', limiteHoje.toISOString())
-      .filter('cliente_info->>telefone', 'ilike', `%${qDigits}%`)
-      .limit(5);
-    porTelefone = telData || [];
+  if (error) throw new Error(`[getAcompanhamentoPedido] ${error.message}`);
+
+  let encontrados = [];
+  for (const p of (data || [])) {
+    const idVenda    = (p.id_venda || '').replace(/\s+/g,'').toLowerCase();
+    const isMatchID  = idVenda && (idVenda.includes(qNorm) || (qNorm.includes(idVenda) && idVenda.length > 4));
+
+    let isMatchPhone = false;
+    if (qDigits.length >= 7 && p.cliente_info) {
+      const tel = ((p.cliente_info.telefone || '')).replace(/\D/g, '');
+      if (tel.length >= 7 && tel.includes(qDigits)) isMatchPhone = true;
+    }
+
+    if (isMatchID) {
+      encontrados.push(p);
+    } else if (isMatchPhone) {
+      const dt = new Date(p.data_hora);
+      if (dt >= limiteHoje) encontrados.push(p);
+    }
   }
 
-  // Combina e deduplica resultados
-  const vistos = new Set();
-  let encontrados = [...(porId || []), ...porTelefone]
-    .filter(p => {
-      if (vistos.has(p.id_venda)) return false;
-      vistos.add(p.id_venda);
-      return true;
-    });
-
   if (encontrados.length === 0)
-    return { erro: 'Pedido não encontrado de hoje. Verifique o número e tente novamente.' };
+    return { erro: 'Pedido não encontrado. Verifique o número e tente novamente.' };
 
-  // Ordena pelo mais recente
-  encontrados.sort((a, b) => {
-    const tA = a.data_hora ? new Date(a.data_hora).getTime() : 0;
-    const tB = b.data_hora ? new Date(b.data_hora).getTime() : 0;
-    return tB - tA;
-  });
-
-  encontrados = encontrados.slice(0, 3);
+  encontrados = encontrados.slice(0, 3); // máximo 3 pedidos
 
   const statusLabels = {
     NOVO: 'Recebido', PREPARANDO: 'Preparando', PRONTO: 'Pronto para retirada',
@@ -1164,78 +718,81 @@ async function getAcompanhamentoPedido(lojaId, query) {
     ENTREGUE: 'Entregue ✅', CANCELADO: 'Cancelado ❌',
   };
 
-  const resultados = encontrados.map(encontrado => {
-    let itensResumo = '';
-    try {
-      const arr = Array.isArray(encontrado.itens_comprados)
-        ? encontrado.itens_comprados
-        : (typeof encontrado.itens_comprados === 'string'
-            ? JSON.parse(encontrado.itens_comprados) : []);
-      itensResumo = arr.map(it =>
-        it.descricao + (it.preco ? ' — R$' + parseFloat(it.preco).toFixed(2).replace('.', ',') : '')
-      ).join('\n');
-    } catch { /* ignora */ }
+  return encontrados.map(p => {
+    const statusVal = (p.status || '').toUpperCase();
+    const cli       = p.cliente_info   || {};
+    const itens     = p.itens_comprados || [];
 
-    let nomeCliente = '';
-    let enderecoCli = '';
-    try {
-      const cli = typeof encontrado.cliente_info === 'object'
-        ? (encontrado.cliente_info || {})
-        : JSON.parse(encontrado.cliente_info || '{}');
-      nomeCliente = cli.nome    || '';
-      enderecoCli = cli.endereco || '';
-    } catch { /* ignora */ }
-
-    // Normaliza data_hora: ISO → string BR
-    let dataHoraV = encontrado.data_hora || '';
-    if (dataHoraV && /^\d{4}-\d{2}-\d{2}T/.test(dataHoraV.toString())) {
-      dataHoraV = new Date(dataHoraV)
-        .toLocaleString('pt-BR', { timeZone: TZ, hour12: false })
-        .replace(',', '');
-    }
-
-    const statusVal = (encontrado.status || '').toUpperCase();
+    const itensResumo = itens.map(it =>
+      it.descricao + (it.preco ? ' — R$' + parseFloat(it.preco).toFixed(2).replace('.', ',') : '')
+    ).join('\n');
 
     return {
-      id_venda:        encontrado.id_venda        || '',
-      origem:          (encontrado.origem         || '').toUpperCase(),
+      id_venda:        p.id_venda    || '',
+      origem:          (p.origem     || '').toUpperCase(),
       status:          statusVal,
-      status_label:    statusLabels[statusVal]    || statusVal,
-      data_hora:       dataHoraV.toString(),
-      total_final:     parseFloat(encontrado.total_final || 0),
-      entregador_nome: (encontrado.entregador_nome || '').toString(),
-      nome_cliente:    nomeCliente,
-      endereco:        enderecoCli,
+      status_label:    statusLabels[statusVal] || statusVal,
+      data_hora:       p.data_hora   || '',
+      total_final:     parseFloat(p.total_final || 0),
+      entregador_nome: p.entregador_nome || '',
+      nome_cliente:    cli.nome      || '',
+      endereco:        cli.endereco  || '',
       itens_resumo:    itensResumo,
     };
   });
+}
 
-  return resultados;
+async function getDeliveryEmAndamento(lojaId) {
+  const limite = new Date();
+  limite.setDate(limite.getDate() - 7);
+  limite.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('pedidos').select('*')
+    .eq('loja_id', lojaId)
+    .in('origem', ['DELIVERY', 'ONLINE'])
+    .gte('data_hora', limite.toISOString());
+
+  if (error) throw new Error(`[getDeliveryEmAndamento] ${error.message}`);
+
+  const limiteHoje = new Date(); limiteHoje.setHours(0, 0, 0, 0);
+
+  return (data || []).filter(p => {
+    const st = (p.status || '').toUpperCase();
+    if (st === 'CANCELADO') return false;
+    if (st === 'ENTREGUE') {
+      const dt = new Date(p.data_hora);
+      return dt >= limiteHoje; // mantém entregues de hoje para a carteira do entregador
+    }
+    return true;
+  });
+}
+
+async function getDadosPolling(lojaId) {
+  const [pedidosDia, deliveryAtivo] = await Promise.all([
+    getPedidosDoDia(lojaId),
+    getDeliveryEmAndamento(lojaId),
+  ]);
+  return { pedidosDia, deliveryAtivo };
 }
 
 
 // ══════════════════════════════════════════════════════════
-// PEDIDOS — ESCRITA (PDV, Balcão, Delivery, Online)
+// PEDIDOS — ESCRITA (Balcão, Delivery, Online)
 // ══════════════════════════════════════════════════════════
-
-const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY || '';
-const ONESIGNAL_APP_ID = 'c7565fa8-cd8c-4264-85b4-1a9d9cf150af';
 
 async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador = false) {
   if (!ONESIGNAL_REST_API_KEY) return;
   try {
     const filtros = [{ field: 'tag', key: 'loja_id', relation: '=', value: lojaId }];
-    if (ignorarEntregador) {
+    if (ignorarEntregador)
       filtros.push({ field: 'tag', key: 'cargo', relation: '!=', value: 'Entregador' });
-    }
+
     await fetch('https://onesignal.com/api/v1/notifications', {
       method: 'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Key ${ONESIGNAL_REST_API_KEY}`,
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Key ${ONESIGNAL_REST_API_KEY}` },
       body: JSON.stringify({
-        app_id:   ONESIGNAL_APP_ID,
+        app_id: ONESIGNAL_APP_ID,
         filters:  filtros,
         headings: { en: titulo },
         contents: { en: mensagem },
@@ -1244,54 +801,67 @@ async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador
   } catch (e) { console.error('[OneSignal] Erro:', e); }
 }
 
-const _COLUNAS_PEDIDO_DEFAULT = {
-  id_venda: '', origem: '', data_hora: '', operador: '', cliente_info: null,
-  itens_comprados: [], subtotal: 0, desconto: 0, taxa_entrega: 0,
-  total_final: 0, metodo_pagamento: '', status: '',
-  peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
-  preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
-};
+/**
+ * Persiste um pedido na tabela `pedidos`.
+ * cliente_info e itens_comprados são enviados como objetos JSON nativos (JSONB).
+ */
+async function registrarVenda(lojaId, pedido) {
+  const dados = {
+    loja_id:          lojaId,
+    origem:           pedido.origem,
+    data_hora:        new Date().toISOString(),
+    operador:         pedido.operador         || 'CAIXA',
+    // JSONB: envia como objeto/array — NÃO usar JSON.stringify aqui
+    cliente_info:     pedido.cliente_info     || {},
+    itens_comprados:  pedido.itens_comprados  || [],
+    subtotal:         pedido.subtotal         || 0,
+    desconto:         pedido.desconto         || 0,
+    taxa_entrega:     pedido.taxa_entrega     || 0,
+    total_final:      pedido.total_final      || 0,
+    metodo_pagamento: pedido.metodo_pagamento || '',
+    status:           pedido.status           || 'NOVO',
+    peso_bruto_g:     pedido.peso_bruto_g     || 0,
+    id_tara:          pedido.id_tara          || null,
+    peso_tara_g:      pedido.peso_tara_g      || 0,
+    peso_liquido_g:   pedido.peso_liquido_g   || 0,
+    preco_kg:         pedido.preco_kg         || 0,
+    troco:            pedido.troco            || 0,
+    entregador_nome:  pedido.entregador_nome  || '',
+    cancelado_por:    pedido.cancelado_por    || '',
+  };
 
-async function registrarVendaPDV(lojaId, pedido) {
-  const doc = Object.assign({}, _COLUNAS_PEDIDO_DEFAULT, pedido);
+  const { data, error } = await supabase
+    .from('pedidos').insert(dados).select('id_venda').single();
+  if (error) throw new Error(`[registrarVenda] ${error.message}`);
 
-  // Garante timestamp ISO para o campo data_hora
-  if (!doc.data_hora) doc.data_hora = new Date().toISOString();
-
-  const res = await salvarRegistro(lojaId, 'pedidos', doc, 'id_venda');
-
-  if (res.sucesso && (pedido.origem === 'DELIVERY' || pedido.origem === 'ONLINE')) {
-    let isRetirada = false;
-    try {
-      const cli = typeof pedido.cliente_info === 'string'
-        ? JSON.parse(pedido.cliente_info)
-        : (pedido.cliente_info || {});
-      if (cli.endereco === 'Retirada na loja') isRetirada = true;
-    } catch { /* ignora */ }
-
-    if (isRetirada) {
-      dispararPushOneSignal(lojaId, '🛍️ Nova Retirada!', 'Cliente vem buscar na loja. Verifique o painel.', true);
-    } else {
-      dispararPushOneSignal(lojaId, '🔔 Novo Pedido de Delivery!', 'Uma nova entrega caiu no painel. Verifique!', false);
-    }
+  // Push OneSignal para delivery/online
+  if (['DELIVERY', 'ONLINE'].includes(pedido.origem)) {
+    const isRetirada = pedido.cliente_info?.endereco === 'Retirada na loja';
+    dispararPushOneSignal(
+      lojaId,
+      isRetirada ? '🛍️ Nova Retirada!' : '🔔 Novo Pedido de Delivery!',
+      isRetirada ? 'Cliente vem buscar na loja. Verifique o painel.' : 'Uma nova entrega caiu no painel. Verifique!',
+      isRetirada,
+    );
   }
-  return res;
+
+  return { sucesso: true, mensagem: 'Pedido registrado!', id: data.id_venda };
 }
 
 async function registrarVendaBalcao(lojaId, dados) {
-  const pesoBruto = parseFloat(dados.peso_bruto_g || 0);
-  const pesoTara  = parseFloat(dados.peso_tara_g  || 0);
-  const precoKG   = parseFloat(dados.preco_kg     || 0);
+  const pesoBruto = parseFloat(dados.pesoBruto_g || 0);
+  const pesoTara  = parseFloat(dados.pesoTara_g  || 0);
+  const precoKG   = parseFloat(dados.precoKG     || 0);
   const pesoLiq   = Math.max(0, pesoBruto - pesoTara);
   const valorAcai = Math.round((pesoLiq / 1000) * precoKG * 100) / 100;
 
-  const itensExtras = dados.itens_extras || [];
+  const itensExtras = dados.itensExtras || [];
   const somaExtras  = itensExtras.reduce((s, i) => s + parseFloat(i.preco || 0), 0);
   const subtotal    = Math.round((valorAcai + somaExtras) * 100) / 100;
   const desconto    = parseFloat(dados.desconto  || 0);
   const total       = Math.max(0, Math.round((subtotal - desconto) * 100) / 100);
-  const valorPago   = parseFloat(dados.valor_pago || 0);
-  const troco       = dados.metodo_pagamento === 'DINHEIRO'
+  const valorPago   = parseFloat(dados.valorPago || 0);
+  const troco       = dados.pagamento === 'DINHEIRO'
     ? Math.max(0, Math.round((valorPago - total) * 100) / 100) : 0;
 
   const itemAcai   = pesoBruto > 0
@@ -1299,12 +869,13 @@ async function registrarVendaBalcao(lojaId, dados) {
     : [];
   const todosItens = itemAcai.concat(itensExtras);
 
-  if (dados.nome_cliente?.trim()) {
-    const cpfLimpo = dados.cpf_cliente ? dados.cpf_cliente.toString().replace(/\D/g, '') : '';
+  // Auto-cadastro de cliente
+  if (dados.nomeCliente?.trim()) {
+    const cpfLimpo = dados.cpfCliente ? dados.cpfCliente.toString().replace(/\D/g, '') : '';
     const jaExiste = cpfLimpo ? await buscarClientePorCPF(lojaId, cpfLimpo) : null;
     if (!jaExiste) {
       await salvarCliente(lojaId, {
-        nome:     dados.nome_cliente.trim(),
+        nome:     dados.nomeCliente.trim(),
         cpf:      cpfLimpo || '',
         telefone: dados.telefone ? dados.telefone.replace(/\D/g, '') : '',
       });
@@ -1312,76 +883,86 @@ async function registrarVendaBalcao(lojaId, dados) {
   }
 
   const pedido = {
-    id_venda: '', origem: 'BALCAO', data_hora: new Date().toISOString(),
-    operador: dados.operador || 'CAIXA',
-    cliente_info:    { nome: dados.nome_cliente || '', cpf: dados.cpf_cliente || '', telefone: dados.telefone || '' },
-    itens_comprados: todosItens,
-    subtotal, desconto, taxa_entrega: 0, total_final: total,
-    metodo_pagamento: dados.metodo_pagamento || '', status: 'ENTREGUE',
-    peso_bruto_g: pesoBruto, id_tara: dados.id_tara || null, peso_tara_g: pesoTara,
-    peso_liquido_g: pesoLiq, preco_kg: precoKG, troco,
-    entregador_nome: '', cancelado_por: '',
+    origem:           'BALCAO',
+    operador:         dados.operador || 'CAIXA',
+    cliente_info:     { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '' },
+    itens_comprados:  todosItens,
+    subtotal, desconto,
+    taxa_entrega:     0,
+    total_final:      total,
+    metodo_pagamento: dados.pagamento || '',
+    status:           'ENTREGUE',
+    peso_bruto_g:     pesoBruto,
+    id_tara:          dados.idTara || null,
+    peso_tara_g:      pesoTara,
+    peso_liquido_g:   pesoLiq,
+    preco_kg:         precoKG,
+    troco,
   };
 
-  const resultado = await registrarVendaPDV(lojaId, pedido);
+  const resultado = await registrarVenda(lojaId, pedido);
   if (resultado.sucesso) Object.assign(resultado, { troco, total, pesoLiq });
   return resultado;
 }
 
 async function registrarVendaDelivery(lojaId, dados) {
-  const itens    = dados.itens_comprados || [];
-  const subtotal = Math.round(itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
-  const desconto = parseFloat(dados.desconto    || 0);
-  const taxaEnt  = parseFloat(dados.taxa_entrega || 0);
-  const total    = Math.max(0, Math.round((subtotal - desconto + taxaEnt) * 100) / 100);
-  const valorPago = parseFloat(dados.valor_pago  || 0);
-  const troco    = dados.metodo_pagamento === 'DINHEIRO'
+  const itens     = dados.itens || [];
+  const subtotal  = Math.round(itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
+  const desconto  = parseFloat(dados.desconto    || 0);
+  const taxaEnt   = parseFloat(dados.taxaEntrega || 0);
+  const total     = Math.max(0, Math.round((subtotal - desconto + taxaEnt) * 100) / 100);
+  const valorPago = parseFloat(dados.valorPago   || 0);
+  const troco     = dados.pagamento === 'DINHEIRO'
     ? Math.max(0, Math.round((valorPago - total) * 100) / 100) : 0;
 
   const pedido = {
-    id_venda: '', origem: 'DELIVERY', data_hora: new Date().toISOString(),
-    operador: dados.operador || 'CAIXA',
-    cliente_info:    { nome: dados.nome_cliente || '', cpf: dados.cpf_cliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
-    itens_comprados: itens,
-    subtotal, desconto, taxa_entrega: taxaEnt, total_final: total,
-    metodo_pagamento: dados.metodo_pagamento || '', status: 'NOVO',
-    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
-    preco_kg: 0, troco, entregador_nome: '', cancelado_por: '',
+    origem:           'DELIVERY',
+    operador:         dados.operador || 'CAIXA',
+    cliente_info:     { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
+    itens_comprados:  itens,
+    subtotal, desconto,
+    taxa_entrega:     taxaEnt,
+    total_final:      total,
+    metodo_pagamento: dados.pagamento || '',
+    status:           'NOVO',
+    troco,
   };
 
-  const resultado = await registrarVendaPDV(lojaId, pedido);
+  const resultado = await registrarVenda(lojaId, pedido);
   if (resultado.sucesso) Object.assign(resultado, { troco, total });
   return resultado;
 }
 
 /** Finaliza pedido do cardápio online (rota pública — recalcula total no servidor). */
 async function finalizarPedidoOnline(lojaId, dadosPedido) {
-  if (!dadosPedido?.itens_comprados?.length) throw new Error('Pedido vazio ou formato inválido.');
+  if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
 
   const config = await getConfiguracoes(lojaId);
-  if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
+  if ((config.status_loja || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento. Tente mais tarde.');
 
-  const subtotalReal    = Math.round(dadosPedido.itens_comprados.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
+  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
   if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
     throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
 
   const desconto = parseFloat(dadosPedido.desconto    || 0);
-  const taxaEnt  = parseFloat(dadosPedido.taxa_entrega || 0);
+  const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
 
   const pedido = {
-    id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
-    cliente_info:    { nome: dadosPedido.nome_cliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    itens_comprados: dadosPedido.itens_comprados,
-    subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
-    metodo_pagamento: dadosPedido.metodo_pagamento || '', status: 'NOVO',
-    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
-    preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
+    origem:           'ONLINE',
+    operador:         'APP',
+    cliente_info:     { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados:  dadosPedido.itens,
+    subtotal:         subtotalReal, desconto,
+    taxa_entrega:     taxaEnt,
+    total_final:      total,
+    metodo_pagamento: dadosPedido.pagamento || '',
+    status:           'NOVO',
   };
 
-  return registrarVendaPDV(lojaId, pedido);
+  return registrarVenda(lojaId, pedido);
 }
 
 async function atualizarStatusPedido(lojaId, idVenda, novoStatus) {
@@ -1389,51 +970,31 @@ async function atualizarStatusPedido(lojaId, idVenda, novoStatus) {
   if (!statusValidos.includes(novoStatus))
     return { sucesso: false, mensagem: `Status inválido: ${novoStatus}` };
 
-  // Verifica existência (e garante loja_id correto)
-  const { data: existente, error: errBusca } = await supabase
-    .from('pedidos')
-    .select('id_venda')
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId)
-    .maybeSingle();
-
-  if (errBusca) throw new Error(`[atualizarStatusPedido:check] ${errBusca.message}`);
-  if (!existente) return { sucesso: false, mensagem: `Pedido "${idVenda}" não encontrado.` };
-
-  const { error } = await supabase
-    .from('pedidos')
-    .update({ status: novoStatus })
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId);
+  const { error, count } = await supabase
+    .from('pedidos').update({ status: novoStatus }, { count: 'exact' })
+    .eq('id_venda', idVenda).eq('loja_id', lojaId);
 
   if (error) throw new Error(`[atualizarStatusPedido] ${error.message}`);
+  if (count === 0) return { sucesso: false, mensagem: `Pedido "${idVenda}" não encontrado.` };
   return { sucesso: true };
 }
 
 async function atualizarStatusEntrega(lojaId, idVenda, novoStatus) {
-  const permitidos = ['EM_MONTAGEM', 'A_CAMINHO', 'ENTREGUE'];
-  if (!permitidos.includes(novoStatus))
+  if (!['EM_MONTAGEM','A_CAMINHO','ENTREGUE'].includes(novoStatus))
     return { sucesso: false, mensagem: `Status inválido para entrega: ${novoStatus}` };
   return atualizarStatusPedido(lojaId, idVenda, novoStatus);
 }
 
-/**
- * Cancela um pedido mediante autenticação de supervisor ou acima.
- * Nota: substituído db.runTransaction() por leitura + escrita sequencial
- * (aceitável para este caso de uso — cancelamentos não são concorrentes).
- */
 async function cancelarPedidoAutorizado(lojaId, idVenda, loginAuth, senhaAuth) {
   const auth = await validarSupervisorOuAcima(lojaId, loginAuth, senhaAuth);
   if (!auth.autorizado) return { sucesso: false, mensagem: auth.mensagem };
 
-  const { data: pedido, error: errBusca } = await supabase
-    .from('pedidos')
-    .select('status, origem')
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId)
-    .maybeSingle();
+  // Lê o pedido atual para validações
+  const { data: pedido, error: errGet } = await supabase
+    .from('pedidos').select('status, origem')
+    .eq('id_venda', idVenda).eq('loja_id', lojaId).maybeSingle();
 
-  if (errBusca) throw new Error(`[cancelarPedido:check] ${errBusca.message}`);
+  if (errGet) throw new Error(errGet.message);
   if (!pedido) throw new Error(`Pedido "${idVenda}" não encontrado.`);
 
   const statusAtual = (pedido.status || '').toUpperCase();
@@ -1442,141 +1003,107 @@ async function cancelarPedidoAutorizado(lojaId, idVenda, loginAuth, senhaAuth) {
   if (statusAtual === 'CANCELADO') throw new Error('Pedido já cancelado.');
   if (statusAtual === 'ENTREGUE' && origemAtual !== 'BALCAO') throw new Error('Pedido já entregue.');
 
-  const { error } = await supabase
+  const { error: errUpd } = await supabase
     .from('pedidos')
-    .update({
-      status:        'CANCELADO',
-      cancelado_por: `${auth.nome} (${auth.cargo}) — ${_agora()}`,
-    })
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId);
+    .update({ status: 'CANCELADO', cancelado_por: `${auth.nome} (${auth.cargo}) — ${_agora()}` })
+    .eq('id_venda', idVenda).eq('loja_id', lojaId);
 
-  if (error) throw new Error(`[cancelarPedido:update] ${error.message}`);
+  if (errUpd) throw new Error(errUpd.message);
   return { sucesso: true, mensagem: `Pedido cancelado por ${auth.nome} (${auth.cargo}).` };
 }
 
-/**
- * Atribui entregador a um pedido delivery.
- * Nota: substituído db.runTransaction() por leitura + escrita sequencial.
- */
 async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
   if (!idVenda || !nomeEntregador?.toString().trim())
     return { sucesso: false, mensagem: 'ID do pedido e nome do entregador são obrigatórios.' };
 
   const nomeTrimmed = nomeEntregador.toString().trim();
 
-  const { data: pedido, error: errBusca } = await supabase
-    .from('pedidos')
-    .select('status, entregador_nome')
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId)
-    .maybeSingle();
+  const { data: pedido, error } = await supabase
+    .from('pedidos').select('status, entregador_nome')
+    .eq('id_venda', idVenda).eq('loja_id', lojaId).maybeSingle();
 
-  if (errBusca) throw new Error(`[pegarDelivery:check] ${errBusca.message}`);
+  if (error) throw new Error(error.message);
   if (!pedido) throw new Error('Pedido não encontrado.');
 
-  const status      = (pedido.status          || '').toUpperCase();
-  const entregAtual = (pedido.entregador_nome || '').toString().trim();
+  const statusAtual  = (pedido.status          || '').toUpperCase();
+  const entregAtual  = (pedido.entregador_nome || '').trim();
 
-  if (status === 'ENTREGUE')  throw new Error('Pedido já entregue.');
-  if (status === 'CANCELADO') throw new Error('Pedido cancelado.');
+  if (statusAtual === 'ENTREGUE')  throw new Error('Pedido já entregue.');
+  if (statusAtual === 'CANCELADO') throw new Error('Pedido cancelado.');
 
   if (entregAtual && entregAtual.toLowerCase() !== nomeTrimmed.toLowerCase())
     return { sucesso: false, mensagem: `Este pedido já foi pego por ${entregAtual}.`, entregadorAtual: entregAtual };
 
-  // Atualização atómica com trava de estado: só atualiza se o status continuar a ser o que validámos em cima
-  const { data: updateResult, error } = await supabase
+  const { error: errUpd } = await supabase
     .from('pedidos')
     .update({ entregador_nome: nomeTrimmed, status: 'EM_MONTAGEM' })
-    .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId)
-    .eq('status', status) // Bloqueio otimista
-    .select();
+    .eq('id_venda', idVenda).eq('loja_id', lojaId);
 
-  if (error) throw new Error(`[pegarDelivery:update] ${error.message}`);
-  
-  if (!updateResult || updateResult.length === 0) {
-    return { sucesso: false, mensagem: 'Este pedido acabou de ser aceite por outro entregador.' };
-  }
-
+  if (errUpd) throw new Error(errUpd.message);
   return { sucesso: true, mensagem: `Pedido atribuído a ${nomeTrimmed}.` };
 }
 
 
 // ══════════════════════════════════════════════════════════
-// CADASTROS (CRUD genérico por loja)
+// CADASTROS (CRUD POR LOJA)
 // ══════════════════════════════════════════════════════════
 
-const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          d, 'id_usuario');
-const excluirUsuario        = (lojaId, id) => deletarRegistro(lojaId, 'usuarios', id);
-const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai-categorias',   d, 'id_categoria');
-const excluirAcaiCategoria  = (lojaId, id) => deletarRegistro(lojaId, 'acai-categorias', id);
-const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai-ingredientes', d, 'id_ingrediente');
-const excluirAcaiIngrediente= (lojaId, id) => deletarRegistro(lojaId, 'acai-ingredientes', id);
-const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai-modelos',      d, 'id_modelo');
-const excluirAcaiModelo     = (lojaId, id) => deletarRegistro(lojaId, 'acai-modelos', id);
-const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          d, 'id_item');
-const excluirItemFixo       = (lojaId, id) => deletarRegistro(lojaId, 'cardapio', id);
-const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           d, 'id_bairro');
-const excluirBairro         = (lojaId, id) => deletarRegistro(lojaId, 'bairros', id);
-const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            d, 'codigo_cupom');
-const excluirCupom          = (lojaId, id) => deletarRegistro(lojaId, 'cupons', id);
-const salvarTara            = (lojaId, d) => salvarRegistro(lojaId, 'taras',             d, 'id_tara');
-const excluirTara           = (lojaId, id) => deletarRegistro(lojaId, 'taras', id);
+// Aliases semânticos que delegam para o helper genérico
+const salvarUsuario         = (l, d) => salvarRegistro(l, 'usuarios',          d);
+const excluirUsuario        = (l, id) => deletarRegistro(l, 'usuarios', id);
+const salvarAcaiCategoria   = (l, d) => salvarRegistro(l, 'acai-categorias',   d);
+const excluirAcaiCategoria  = (l, id) => deletarRegistro(l, 'acai-categorias', id);
+const salvarAcaiIngrediente = (l, d) => salvarRegistro(l, 'acai-ingredientes', d);
+const excluirAcaiIngrediente= (l, id) => deletarRegistro(l, 'acai-ingredientes', id);
+const salvarAcaiModelo      = (l, d) => salvarRegistro(l, 'acai-modelos',      d);
+const excluirAcaiModelo     = (l, id) => deletarRegistro(l, 'acai-modelos', id);
+const salvarItemFixo        = (l, d) => salvarRegistro(l, 'cardapio',          d);
+const excluirItemFixo       = (l, id) => deletarRegistro(l, 'cardapio', id);
+const salvarBairro          = (l, d) => salvarRegistro(l, 'bairros',           d);
+const excluirBairro         = (l, id) => deletarRegistro(l, 'bairros', id);
+const salvarCupom           = (l, d) => salvarRegistro(l, 'cupons',            d);
+const excluirCupom          = (l, id) => deletarRegistro(l, 'cupons', id);
+const salvarTara            = (l, d) => salvarRegistro(l, 'taras',             d);
+const excluirTara           = (l, id) => deletarRegistro(l, 'taras', id);
 
 async function salvarCliente(lojaId, dados) {
-  // data_cadastro em ISO para armazenar como TIMESTAMPTZ
-  if (!dados.data_cadastro) dados.data_cadastro = new Date().toISOString();
-  return salvarRegistro(lojaId, 'clientes', dados, 'id_cliente');
+  const registro = {
+    loja_id:       lojaId,
+    nome:          dados.nome      || '',
+    cpf:           dados.cpf       || '',
+    telefone:      dados.telefone  || '',
+    data_cadastro: dados.data_cadastro || new Date().toISOString(),
+  };
+  if (dados.id_cliente) registro.id_cliente = dados.id_cliente;
+
+  const { data, error } = dados.id_cliente
+    ? await supabase.from('clientes').update(registro).eq('id_cliente', dados.id_cliente).eq('loja_id', lojaId).select('id_cliente').single()
+    : await supabase.from('clientes').insert(registro).select('id_cliente').single();
+
+  if (error) throw new Error(`[salvarCliente] ${error.message}`);
+  return { sucesso: true, mensagem: dados.id_cliente ? 'Atualizado!' : 'Salvo!', id: data.id_cliente };
 }
 
 async function buscarClientePorCPF(lojaId, cpf) {
   const cpfLimpo = cpf.toString().replace(/\D/g, '');
   if (cpfLimpo.length !== 11) return null;
-
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('*')
-    .eq('loja_id', lojaId)
-    .eq('cpf', cpfLimpo)
-    .limit(1);
-
-  if (error) throw new Error(`[buscarClientePorCPF] ${error.message}`);
-  return data?.length ? _normalizarRow('clientes', data[0]) : null;
+  const { data } = await supabase
+    .from('clientes').select('*').eq('loja_id', lojaId).eq('cpf', cpfLimpo).maybeSingle();
+  return data;
 }
 
 async function buscarClientePorTelefone(lojaId, telefone) {
   const telLimpo = telefone.toString().replace(/\D/g, '');
-
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('*')
-    .eq('loja_id', lojaId)
-    .eq('telefone', telLimpo)
-    .limit(1);
-
-  if (error) throw new Error(`[buscarClientePorTelefone] ${error.message}`);
-  return data?.length ? _normalizarRow('clientes', data[0]) : null;
+  const { data } = await supabase
+    .from('clientes').select('*').eq('loja_id', lojaId).eq('telefone', telLimpo).maybeSingle();
+  return data;
 }
 
 async function salvarConfiguracoesLote(lojaId, configObj) {
-  // Normaliza pix_modo: 'AUTO'/'AUTOMATICO'/'auto' → sempre 'AUTO' ou 'MANUAL'
-  if (configObj['pix_modo'] !== undefined) {
-    const m = (configObj['pix_modo'] || 'MANUAL').toString().toUpperCase().trim();
-    configObj['pix_modo'] = (m === 'AUTO' || m === 'AUTOMATICO' || m === 'AUTOMÁTICO')
-      ? 'AUTO' : 'MANUAL';
-  }
-
-  // configuracoes usa loja_id como PK → upsert direto
-  const dbData = _prepararParaDB('configuracoes', { ...configObj, loja_id: lojaId });
-
-  // Remove campos de controle que não devem ser sobrescritos manualmente
-  delete dbData['atualizado_em'];
-
+  // Garante que loja_id sempre está presente no upsert
   const { error } = await supabase
     .from('configuracoes')
-    .upsert(dbData, { onConflict: 'loja_id' });
-
+    .upsert({ ...configObj, loja_id: lojaId }, { onConflict: 'loja_id' });
   if (error) throw new Error(`[salvarConfiguracoesLote] ${error.message}`);
   invalidarCacheCardapio(lojaId);
   return { sucesso: true, mensagem: 'Configurações salvas.' };
@@ -1592,76 +1119,56 @@ async function validarCupom(lojaId, codigo) {
 
   const codigoUpper = codigo.toString().trim().toUpperCase();
 
-  const { data, error } = await supabase
-    .from('cupons')
-    .select('*')
-    .eq('loja_id', lojaId)
-    .eq('codigo_cupom', codigoUpper)
-    .limit(1);
+  const { data: cupom, error } = await supabase
+    .from('cupons').select('*')
+    .eq('loja_id', lojaId).eq('codigo_cupom', codigoUpper)
+    .maybeSingle();
 
-  if (error) throw new Error(`[validarCupom] ${error.message}`);
-  if (!data?.length) return { valido: false, mensagem: 'Cupom não encontrado.' };
+  if (error) throw new Error(error.message);
+  if (!cupom) return { valido: false, mensagem: 'Cupom não encontrado.' };
 
-  const d = data[0];
+  // ativo é boolean nativo — sem tradução "SIM"/"NÃO"
+  if (!cupom.ativo) return { valido: false, mensagem: 'Cupom inativo ou esgotado.' };
 
-  // ativo: BOOLEAN no Postgres → compatibiliza com lógica legada
-  const ativoRaw = d.ativo;
-  const ativo    = typeof ativoRaw === 'boolean'
-    ? ativoRaw
-    : (ativoRaw || '').toString().toUpperCase() === 'SIM';
-
-  if (!ativo) return { valido: false, mensagem: 'Cupom inativo ou esgotado.' };
-
-  // validade: TIMESTAMPTZ (string ISO) do Postgres
-  if (d.validade) {
-    const validade = new Date(d.validade); // ISO → Date funciona diretamente
-    if (!isNaN(validade.getTime())) {
-      validade.setHours(23, 59, 59, 999);
-      if (validade < new Date()) return { valido: false, mensagem: 'Cupom expirado.' };
-    }
+  if (cupom.validade) {
+    const validade = new Date(cupom.validade);
+    validade.setHours(23, 59, 59, 999);
+    if (validade < new Date()) return { valido: false, mensagem: 'Cupom expirado.' };
   }
 
-  // usar_cardapio: BOOLEAN no Postgres
-  const usarCardapioRaw = d.usar_cardapio;
-  const usarCardapio    = typeof usarCardapioRaw === 'boolean'
-    ? usarCardapioRaw
-    : (usarCardapioRaw || '').toString().toUpperCase() === 'SIM';
-
-  const tipo       = (d.tipo_desconto  || 'VALOR').toUpperCase();
-  const valorBruto = parseFloat(d.valor_desconto) || 0;
-
-  const msgDesc = tipo === 'PERCENTUAL'
-    ? `Desconto de ${valorBruto.toFixed(0)}% aplicado 🎉`
-    : `Desconto de R$ ${valorBruto.toFixed(2).replace('.', ',')} aplicado 🎉`;
+  const tipo       = (cupom.tipo_desconto || 'VALOR').toUpperCase();
+  const valorBruto = parseFloat(cupom.valor_desconto) || 0;
 
   return {
     valido:       true,
-    codigo:       (d.codigo_cupom || '').toString(),
+    codigo:       cupom.codigo_cupom,
     tipo,
     valor:        valorBruto,
     desconto:     tipo === 'VALOR' ? valorBruto : 0,
-    usarCardapio,
-    mensagem:     msgDesc,
+    // usar_cardapio é boolean nativo
+    usar_cardapio: cupom.usar_cardapio,
+    mensagem:     tipo === 'PERCENTUAL'
+      ? `Desconto de ${valorBruto.toFixed(0)}% aplicado 🎉`
+      : `Desconto de R$ ${valorBruto.toFixed(2).replace('.', ',')} aplicado 🎉`,
   };
 }
 
 
 // ══════════════════════════════════════════════════════════
 // MERCADO PAGO — PIX AUTOMÁTICO
-// (Código 100% intacto — apenas lê configurações via getConfiguracoes)
 // ══════════════════════════════════════════════════════════
 
 async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['mp_access_token'] || '').toString().trim();
+  const token  = (config.mp_access_token || '').toString().trim();
   if (!token) return { sucesso: false, mensagem: 'Token do Mercado Pago não configurado.' };
 
   const idempKey = 'PIX-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
   const resp = await fetch('https://api.mercadopago.com/v1/payments', {
-    method:  'POST',
+    method: 'POST',
     headers: {
-      'Content-Type':      'application/json',
-      'Authorization':     `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
       'X-Idempotency-Key': idempKey,
     },
     body: JSON.stringify({
@@ -1684,13 +1191,12 @@ async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
       expiracao:     r.date_of_expiration || '',
     };
   }
-
-  return { sucesso: false, mensagem: (r?.message) || 'Resposta inesperada do Mercado Pago.' };
+  return { sucesso: false, mensagem: r?.message || 'Resposta inesperada do Mercado Pago.' };
 }
 
 async function verificarPagamentoMP(lojaId, idPagamento) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['mp_access_token'] || '').toString().trim();
+  const token  = (config.mp_access_token || '').toString().trim();
   if (!token || !idPagamento) return { status: 'erro', detalhe: 'Dados inválidos.' };
 
   const resp = await fetch(`https://api.mercadopago.com/v1/payments/${idPagamento}`, {
@@ -1703,50 +1209,45 @@ async function verificarPagamentoMP(lojaId, idPagamento) {
 
 async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
   const config = await getConfiguracoes(lojaId);
-  const modoMP = (config['pix_modo'] || 'MANUAL').toUpperCase();
+  const modoMP = (config.pix_modo || 'MANUAL').toUpperCase();
 
-  // Aceita AUTO, AUTOMATICO ou AUTOMÁTICO
-  if (modoMP !== 'AUTO' && modoMP !== 'AUTOMATICO' && modoMP !== 'AUTOMÁTICO') {
+  if (modoMP !== 'AUTO' && modoMP !== 'AUTOMATICO' && modoMP !== 'AUTOMÁTICO')
     return finalizarPedidoOnline(lojaId, dadosPedido);
-  }
 
-  if (!dadosPedido?.itens_comprados?.length) throw new Error('Pedido vazio ou formato inválido.');
-  if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
+  if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
+  if ((config.status_loja || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento.');
 
-  const subtotalReal    = Math.round(dadosPedido.itens_comprados.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
+  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
   if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
     throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
 
   const desconto = parseFloat(dadosPedido.desconto    || 0);
-  const taxaEnt  = parseFloat(dadosPedido.taxa_entrega || 0);
+  const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
 
-  // 1. Tenta gerar o PIX no Mercado Pago com um ID provisório
   const idVendaTemp = 'WEB-' + Date.now().toString().substring(5);
   const pix = await gerarPixMP(
     lojaId, total, idVendaTemp,
     dadosPedido.telefone ? `${dadosPedido.telefone.replace(/\D/g,'')}@mp.br` : 'contato@acaiteria.com.br'
   );
-
-  // 2. Se der erro no PIX, para aqui sem salvar no banco
-  if (!pix.sucesso) {
+  if (!pix.sucesso)
     return { sucesso: false, mensagem: `PIX não gerado: ${pix.mensagem}. Tente outra forma de pagamento.` };
-  }
 
-  // 3. PIX gerado com sucesso → cria o pedido no banco
   const pedido = {
-    id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
-    cliente_info:    { nome: dadosPedido.nome_cliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    itens_comprados: dadosPedido.itens_comprados,
-    subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
-    metodo_pagamento: 'PIX', status: 'AGUARDANDO_PIX',
-    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
-    preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
+    origem:           'ONLINE',
+    operador:         'APP',
+    cliente_info:     { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados:  dadosPedido.itens,
+    subtotal:         subtotalReal, desconto,
+    taxa_entrega:     taxaEnt,
+    total_final:      total,
+    metodo_pagamento: 'PIX',
+    status:           'AGUARDANDO_PIX',
   };
 
-  const res = await registrarVendaPDV(lojaId, pedido);
+  const res = await registrarVenda(lojaId, pedido);
   if (!res.sucesso) return res;
 
   return {
@@ -1764,20 +1265,18 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
     const upd = await atualizarStatusPedido(lojaId, idVenda, 'NOVO');
     return { status: 'approved', liberado: upd.sucesso, mensagem: upd.sucesso ? 'Pagamento confirmado! Pedido enviado para preparo.' : upd.mensagem };
   }
-
   if (verif.status === 'cancelled' || verif.status === 'rejected') {
     await atualizarStatusPedido(lojaId, idVenda, 'CANCELADO');
     return { status: verif.status, mensagem: 'PIX cancelado ou rejeitado. Tente novamente.' };
   }
-
   return { status: 'pending', mensagem: 'Aguardando pagamento...' };
 }
 
 async function getConfigPix(lojaId) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['mp_access_token'] || '').toString().trim();
+  const token  = (config.mp_access_token || '').toString().trim();
   return {
-    modoMP:        (config['pix_modo'] || 'MANUAL').toUpperCase(),
+    modoMP:        (config.pix_modo || 'MANUAL').toUpperCase(),
     mpConfigurado: token.length > 10,
   };
 }
@@ -1787,18 +1286,14 @@ async function getConfigPix(lojaId) {
 // ROTAS — AUTENTICAÇÃO
 // ══════════════════════════════════════════════════════════
 
-/**
- * POST /api/lojas/:loja_id/auth/login
- * Body: { usuario, senha }
- * Retorna token JWT com { loja_id, id, nome, cargo }
- */
-app.post('/api/lojas/:loja_id/auth/login', loginLimiter, handler(async req => {
+/** POST /api/lojas/:loja_id/auth/login — Body: { usuario, senha } */
+app.post('/api/lojas/:loja_id/auth/login', handler(async req => {
   const lojaId    = req.params.loja_id;
   const resultado = await validarLogin(lojaId, req.body.usuario, req.body.senha);
 
   if (resultado.sucesso) {
     resultado.token = jwt.sign(
-      { loja_id: lojaId, id: resultado.id_usuario, nome: resultado.nome, cargo: resultado.cargo },
+      { loja_id: lojaId, id: req.body.usuario, nome: resultado.nome, cargo: resultado.cargo },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
@@ -1806,144 +1301,68 @@ app.post('/api/lojas/:loja_id/auth/login', loginLimiter, handler(async req => {
   return resultado;
 }));
 
-/**
- * POST /api/lojas/:loja_id/auth/validar-supervisor
- * Body: { login, senha }
- */
-app.post('/api/lojas/:loja_id/auth/validar-supervisor', loginLimiter, handler(req =>
+/** POST /api/lojas/:loja_id/auth/validar-supervisor — Body: { login, senha } */
+app.post('/api/lojas/:loja_id/auth/validar-supervisor', handler(req =>
   validarSupervisorOuAcima(req.params.loja_id, req.body.login, req.body.senha)
 ));
 
+/** GET /api/lojas/slug/:slug — Resolve slug → uuid (útil para o frontend) */
+app.get('/api/lojas/slug/:slug', handler(async req => {
+  const id = await resolverSlugParaId(req.params.slug);
+  if (!id) return { sucesso: false, mensagem: 'Loja não encontrada.' };
+  return { sucesso: true, id };
+}));
 
-// ══════════════════════════════════════════════════════════
-// ASAAS — COBRANÇA E ASSINATURA RECORRENTE
-// ══════════════════════════════════════════════════════════
-
-/**
- * Cria um cliente no Asaas e retorna o asaas_customer_id.
- * Chamado uma única vez ao cadastrar uma nova loja.
- */
-async function criarClienteAsaas({ nome, cpfCnpj, email, telefone }) {
-  if (!ASAAS_API_KEY) throw new Error('ASAAS_API_KEY não configurada.');
-
-  const resp = await fetch(`${ASAAS_BASE_URL}/customers`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'access_token': ASAAS_API_KEY },
-    body: JSON.stringify({
-      name:        nome,
-      cpfCnpj:     cpfCnpj.replace(/\D/g, ''),
-      email:       email    || undefined,
-      mobilePhone: telefone ? telefone.replace(/\D/g, '') : undefined,
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  const data = await resp.json();
-  if (!data.id) throw new Error(`[Asaas] Falha ao criar cliente: ${JSON.stringify(data)}`);
-  return data.id; // ex: "cus_000005113026"
-}
-
-/**
- * Cria uma assinatura mensal no Asaas para a loja.
- * O Asaas envia o boleto/PIX por e-mail automaticamente ao cliente.
- * Quando o cliente pagar → webhook PAYMENT_RECEIVED → loja fica 'ativo'.
- * Quando vencer sem pagar → webhook PAYMENT_OVERDUE → loja fica 'bloqueado'.
- */
-async function criarAssinaturaAsaas({ asaasCustomerId, valor, descricao, diaVencimento }) {
-  if (!ASAAS_API_KEY) throw new Error('ASAAS_API_KEY não configurada.');
-
-  // Calcula a próxima data de vencimento
-  const hoje = new Date();
-  const venc  = new Date(hoje.getFullYear(), hoje.getMonth(), diaVencimento || 10);
-  if (venc <= hoje) venc.setMonth(venc.getMonth() + 1);
-  const dataVenc = venc.toISOString().split('T')[0]; // "2026-04-10"
-
-  const resp = await fetch(`${ASAAS_BASE_URL}/subscriptions`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'access_token': ASAAS_API_KEY },
-    body: JSON.stringify({
-      customer:    asaasCustomerId,
-      billingType: 'UNDEFINED',   // Cliente escolhe: boleto, PIX ou cartão
-      value:       valor,
-      nextDueDate: dataVenc,
-      cycle:       'MONTHLY',
-      description: descricao || 'Assinatura — Sistema de Delivery',
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  const data = await resp.json();
-  if (!data.id) throw new Error(`[Asaas] Falha ao criar assinatura: ${JSON.stringify(data)}`);
-  return data;
-}
 
 // ══════════════════════════════════════════════════════════
 // ROTAS — WEBHOOK ASAAS
-// Não requer autenticação JWT, mas valida token do Asaas.
 // ══════════════════════════════════════════════════════════
 
-/**
- * POST /api/webhooks/asaas
- *
- * Eventos tratados:
- *   PAYMENT_OVERDUE  → status da loja = 'bloqueado'
- *   PAYMENT_RECEIVED → status da loja = 'ativo'
- */
 app.post('/api/webhooks/asaas', async (req, res) => {
   try {
     const tokenRecebido = req.headers['asaas-access-token'] || req.headers['x-access-token'] || '';
-    
-    // Trava de Segurança Absoluta: Se não houver token no .env ou for diferente, bloqueia.
-    if (!ASAAS_WEBHOOK_TOKEN || tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
-      console.warn('[Webhook Asaas] Acesso bloqueado (Token ausente ou inválido).');
-      return res.status(401).json({ sucesso: false, mensagem: 'Acesso não autorizado ao Webhook.' });
+    if (ASAAS_WEBHOOK_TOKEN && tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
+      console.warn('[Webhook Asaas] Token inválido:', tokenRecebido);
+      return res.status(401).json({ sucesso: false, mensagem: 'Token inválido.' });
     }
 
     const { event, payment } = req.body;
-
-    if (!event || !payment?.customer) {
+    if (!event || !payment?.customer)
       return res.status(400).json({ sucesso: false, mensagem: 'Payload inválido.' });
-    }
 
-    const customerId        = payment.customer;
-    const eventosMonitorados = ['PAYMENT_OVERDUE', 'PAYMENT_RECEIVED', 'PAYMENT_RESTORED'];
+    const customerId = payment.customer;
+    const eventosMonitorados = ['PAYMENT_OVERDUE','PAYMENT_RECEIVED','PAYMENT_RESTORED'];
 
-    if (!eventosMonitorados.includes(event)) {
+    if (!eventosMonitorados.includes(event))
       return res.json({ sucesso: true, mensagem: `Evento "${event}" ignorado.` });
-    }
 
-    // Busca loja pelo asaas_customer_id
-    const { data: lojas, error: errBusca } = await supabase
-      .from('lojas')
-      .select('id')
-      .eq('asaas_customer_id', customerId)
-      .limit(1);
+    // Busca a loja pelo asaas_customer_id na tabela lojas
+    const { data: lojas, error } = await supabase
+      .from('lojas').select('id')
+      .eq('asaas_customer_id', customerId).limit(1);
 
-    if (errBusca) throw errBusca;
-
-    if (!lojas?.length) {
-      console.warn(`[Webhook Asaas] Nenhuma loja encontrada para customer: ${customerId}`);
+    if (error) throw error;
+    if (!lojas || lojas.length === 0) {
+      console.warn(`[Webhook Asaas] Nenhuma loja para customer: ${customerId}`);
       return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada para este customer.' });
     }
 
     const lojaId    = lojas[0].id;
     const novoStatus = event === 'PAYMENT_OVERDUE' ? 'bloqueado' : 'ativo';
 
-    const { error: errUpdate } = await supabase
+    const { error: errUpd } = await supabase
       .from('lojas')
-      .update({ status: novoStatus, ultimo_evento_asaas: event })
+      .update({ status: novoStatus, ultimo_evento_asaas: event, atualizado_em: new Date().toISOString() })
       .eq('id', lojaId);
 
-    if (errUpdate) throw errUpdate;
+    if (errUpd) throw errUpd;
 
-    // Invalida cache se bloqueou
-    // Invalida AMBOS os caches em qualquer mudança de status
-    _cacheStatusLoja.delete(lojaId);
+    // Invalida caches para forçar revalidação imediata
     invalidarCacheCardapio(lojaId);
+    invalidarStatusCache(lojaId);
 
     console.log(`[Webhook Asaas] Loja "${lojaId}" → status "${novoStatus}" (evento: ${event})`);
     return res.json({ sucesso: true, lojaId, novoStatus });
-
   } catch (err) {
     console.error('[Webhook Asaas] Erro:', err);
     return res.status(500).json({ sucesso: false, mensagem: err.message });
@@ -1964,10 +1383,9 @@ app.get('/api/lojas/:loja_id/dados-config',
   handler(req => getDadosConfig(req.params.loja_id)));
 
 app.get('/api/lojas/:loja_id/dados-monte-acai',
-  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
   handler(req => getDadosMonteAcai(req.params.loja_id)));
 
-// Rota pública do cardápio (sem autenticação — verifica status via middleware próprio)
+// Rota pública do cardápio (sem autenticação JWT)
 app.get('/api/lojas/:loja_id/cardapio',
   verificarStatusLoja,
   handler(req => getCardapioClienteCache(req.params.loja_id)));
@@ -2093,16 +1511,15 @@ app.get('/api/lojas/:loja_id/clientes/telefone/:telefone',
 // ROTAS — PEDIDOS
 // ══════════════════════════════════════════════════════════
 
-// ATENÇÃO: balcão e delivery são rotas internas (painel), exigem cargo
 app.post('/api/lojas/:loja_id/pedidos/balcao',
-  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
+  ...guardCargo('Dono','Gerente','Supervisor','Operador'),
   handler(req => registrarVendaBalcao(req.params.loja_id, req.body)));
 
 app.post('/api/lojas/:loja_id/pedidos/delivery',
-  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
+  ...guardCargo('Dono','Gerente','Supervisor','Operador'),
   handler(req => registrarVendaDelivery(req.params.loja_id, req.body)));
 
-// Pedido online: rota PÚBLICA (cliente do cardápio) — verifica apenas status da loja
+// Pedido online: rota PÚBLICA — verifica apenas status da loja
 app.post('/api/lojas/:loja_id/pedidos/online',
   verificarStatusLoja,
   handler(async req => {
@@ -2110,7 +1527,7 @@ app.post('/api/lojas/:loja_id/pedidos/online',
     catch (e) { return { sucesso: false, mensagem: e.message }; }
   }));
 
-// PIX online: também público
+// PIX online: público
 app.post('/api/lojas/:loja_id/pedidos/online-pix',
   verificarStatusLoja,
   handler(async req => {
@@ -2126,18 +1543,25 @@ app.patch('/api/lojas/:loja_id/pedidos/:id/status-entrega',
   ...guardLoja,
   handler(req => atualizarStatusEntrega(req.params.loja_id, req.params.id, req.body.status)));
 
-// Cancelamento: público apenas na assinatura (usa validação interna de supervisor)
+// Cancelamento: público — usa validação interna de supervisor
 app.post('/api/lojas/:loja_id/pedidos/:id/cancelar',
   handler(req => cancelarPedidoAutorizado(req.params.loja_id, req.params.id, req.body.login, req.body.senha)));
 
 app.post('/api/lojas/:loja_id/pedidos/:id/pegar-delivery',
   ...guardLoja,
-  handler(req => pegarPedidoDelivery(req.params.loja_id, req.params.id, req.body.entregador_nome)));
+  handler(req => pegarPedidoDelivery(req.params.loja_id, req.params.id, req.body.nomeEntregador)));
 
-// Exclusão definitiva de um pedido (Apenas o Dono tem permissão)
+// Exclusão definitiva (apenas Dono)
 app.delete('/api/lojas/:loja_id/pedidos/:id',
   ...guardCargo('Dono'),
-  handler(req => deletarRegistro(req.params.loja_id, 'pedidos', req.params.id)));
+  handler(async req => {
+    const { error, count } = await supabase
+      .from('pedidos').delete({ count: 'exact' })
+      .eq('id_venda', req.params.id).eq('loja_id', req.params.loja_id);
+    if (error) throw new Error(error.message);
+    if (count === 0) return { sucesso: false, mensagem: 'Pedido não encontrado.' };
+    return { sucesso: true, mensagem: 'Pedido excluído.' };
+  }));
 
 app.get('/api/lojas/:loja_id/pedidos/dia',
   ...guardLoja,
@@ -2156,7 +1580,7 @@ app.get('/api/lojas/:loja_id/pedidos/periodo',
   handler(req => getPedidosPorPeriodo(req.params.loja_id, req.query.inicio, req.query.fim)));
 
 app.get('/api/lojas/:loja_id/pedidos/relatorio',
-  ...guardCargo('Dono', 'Gerente'),
+  ...guardCargo('Dono','Gerente'),
   handler(req => getRelatorioAvancado(req.params.loja_id, {
     dataInicio: req.query.inicio,
     dataFim:    req.query.fim,
@@ -2171,91 +1595,21 @@ app.get('/api/lojas/:loja_id/pedidos/relatorio',
 // ROTAS — MERCADO PAGO / PIX
 // ══════════════════════════════════════════════════════════
 
-// /pix/gerar é interno (PDV) → exige login de operador
 app.post('/api/lojas/:loja_id/pix/gerar',
-  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
   handler(req => gerarPixMP(req.params.loja_id, req.body.total, req.body.idVenda, req.body.emailPagador)));
 
-// /pix/verificar é chamado pelo cliente online → verifica apenas status da loja
 app.get('/api/lojas/:loja_id/pix/verificar/:idPagamento',
-  verificarStatusLoja,
   handler(req => verificarPagamentoMP(req.params.loja_id, req.params.idPagamento)));
 
-// /pix/confirmar é chamado pelo cliente online → verifica apenas status da loja
 app.post('/api/lojas/:loja_id/pix/confirmar',
-  verificarStatusLoja,
   handler(req => confirmarPagamentoELiberarPedido(req.params.loja_id, req.body.idVenda, req.body.idPagamento)));
 
-
-// ══════════════════════════════════════════════════════════
-// ROTAS — ADMIN (Cadastro de novas lojas no SaaS)
-// Proteja esta rota com um segredo fixo em produção
-// ou coloque atrás de um painel administrativo.
-// ══════════════════════════════════════════════════════════
-
-/**
- * POST /api/admin/lojas
- * Body: { nome_loja, cpfCnpj, email, telefone, plano, valor_mensalidade, dia_vencimento }
- *
- * O que faz:
- *  1. Cria o cliente no Asaas
- *  2. Cria a assinatura mensal (Asaas já manda o link de pagamento por e-mail)
- *  3. Insere a loja no banco com status 'bloqueado' (só ativa após o 1º pagamento)
- *  4. Retorna o lojaId para configurar o frontend do cliente
- */
-app.post('/api/admin/lojas', handler(async req => {
-  const {
-    nome_loja, cpfCnpj, email, telefone,
-    plano            = 'pro',
-    valor_mensalidade = 99.90,
-    dia_vencimento    = 10,
-    slug,
-  } = req.body;
-
-  if (!nome_loja || !cpfCnpj) {
-    return { sucesso: false, mensagem: 'nome_loja e cpfCnpj são obrigatórios.' };
-  }
-
-  // 1. Cria o cliente no Asaas
-  const asaasCustomerId = await criarClienteAsaas({ nome: nome_loja, cpfCnpj, email, telefone });
-
-  // 2. Cria a assinatura recorrente (Asaas envia o boleto/PIX pro cliente por e-mail)
-  await criarAssinaturaAsaas({
-    asaasCustomerId,
-    valor:          valor_mensalidade,
-    descricao:      `Plano ${plano.toUpperCase()} — ${nome_loja}`,
-    diaVencimento:  dia_vencimento,
-  });
-
-  // 3. Insere a loja no banco como 'bloqueado' — só abre quando o Asaas confirmar o pagamento
-  const { data: novaLoja, error } = await supabase
-    .from('lojas')
-    .insert({
-      nome_loja,
-      status:             'bloqueado',
-      plano:              plano.toLowerCase(),
-      asaas_customer_id:  asaasCustomerId,
-      slug:               slug || nome_loja.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-    })
-    .select('id, slug')
-    .single();
-
-  if (error) throw new Error(`[cadastroLoja] ${error.message}`);
-
-  return {
-    sucesso:         true,
-    mensagem:        `Loja criada! Link de pagamento enviado para ${email}. A loja ficará ativa após o pagamento.`,
-    lojaId:          novaLoja.id,
-    slug:            novaLoja.slug,
-    asaasCustomerId,
-  };
-}));
 
 // ══════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════
 
-app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: _agora() }));
+app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: _agora(), engine: 'supabase' }));
 
 
 // ══════════════════════════════════════════════════════════
@@ -2263,36 +1617,38 @@ app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: _agora() }));
 // ══════════════════════════════════════════════════════════
 
 app.listen(PORT, () => {
-  console.log(`✅  API SaaS Açaíteria rodando na porta ${PORT} — Supabase (acaiteria schema)`);
-
+  console.log(`✅  API SaaS Açaíteria (Supabase) rodando na porta ${PORT}`);
   console.log(`
   ╔══════════════════════════════════════════════════════════════════════╗
-  ║  ⚠️  CHECKLIST OBRIGATÓRIO — SUPABASE                               ║
+  ║  ⚠️  CHECKLIST OBRIGATÓRIO ANTES DE COMEÇAR A VENDER               ║
   ╠══════════════════════════════════════════════════════════════════════╣
   ║                                                                      ║
-  ║  SUPABASE — CONFIGURAÇÃO:                                            ║
-  ║  [1] Em Settings → API → "Extra Search Path":                       ║
-  ║      Adicione o schema: acaiteria                                    ║
-  ║  [2] Confirmar que todas as tabelas usam nomes de coluna lowercase.  ║
-  ║  [3] Criar o primeiro registro em acaiteria.lojas:                  ║
-  ║      INSERT INTO acaiteria.lojas (nome_loja, status, plano)         ║
-  ║      VALUES ('Nome da Loja', 'ativo', 'pro') RETURNING id;          ║
-  ║  [4] Salvar o UUID retornado como loja_id no .env do frontend.      ║
+  ║  SUPABASE:                                                           ║
+  ║  [1] Criar as tabelas via SQL Editor conforme o schema acordado.     ║
+  ║      Tabelas obrigatórias: lojas, configuracoes, usuarios, pedidos,  ║
+  ║      cardapio, acai_categorias, acai_ingredientes, acai_modelos,     ║
+  ║      bairros, cupons, taras, clientes.                               ║
+  ║  [2] Habilitar RLS em todas as tabelas (segurança multi-tenant).     ║
+  ║      O backend usa service_role key → bypassa RLS no servidor.       ║
+  ║  [3] Garantir que as colunas boolean usam tipo BOOLEAN nativo        ║
+  ║      (disponivel, ativo, mostrar_online, retirada_loja_ativo, etc.)  ║
+  ║      Sem "SIM"/"NÃO" — somente true/false.                          ║
+  ║  [4] Colunas cliente_info e itens_comprados devem ser tipo JSONB.    ║
   ║                                                                      ║
   ║  VARIÁVEIS DE AMBIENTE (.env):                                       ║
-  ║  [5] SUPABASE_URL=https://<projeto>.supabase.co                     ║
-  ║  [6] SUPABASE_SERVICE_ROLE_KEY=<sua-service-role-key>               ║
-  ║      (NÃO usar a anon key — service_role bypassa RLS)               ║
+  ║  [5] SUPABASE_URL=https://<projeto>.supabase.co                      ║
+  ║  [6] SUPABASE_SERVICE_KEY=<service_role key do projeto>              ║
   ║  [7] JWT_SECRET=<mínimo 64 chars aleatórios>                        ║
+  ║      node -e "console.log(require('crypto')                          ║
+  ║      .randomBytes(64).toString('hex'))"                              ║
   ║                                                                      ║
   ║  ASAAS:                                                              ║
-  ║  [8] Em Configurações → Integrações → Webhooks, cadastrar:          ║
-  ║      https://SEU_BACKEND/api/webhooks/asaas                         ║
-  ║  [9] Salvar o asaas_customer_id de cada loja na tabela lojas.       ║
+  ║  [8] Cadastrar webhook: https://SEU_BACKEND/api/webhooks/asaas       ║
+  ║  [9] ASAAS_WEBHOOK_TOKEN=<token gerado no painel Asaas>              ║
   ║                                                                      ║
   ║  SEGURANÇA:                                                          ║
-  ║  [10] Nunca commitar o .env no Git. Adicione ao .gitignore.         ║
-  ║  [11] A SUPABASE_SERVICE_ROLE_KEY dá acesso total — proteja-a.      ║
+  ║  [10] JAMAIS commite o .env no Git. Adicione ao .gitignore AGORA.   ║
+  ║  [11] JAMAIS exponha SUPABASE_SERVICE_KEY no frontend.              ║
   ║                                                                      ║
   ╚══════════════════════════════════════════════════════════════════════╝
   `);
