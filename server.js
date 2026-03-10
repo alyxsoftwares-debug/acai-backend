@@ -849,18 +849,33 @@ const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY || '';
 const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID || '';
 
 async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador = false) {
-  if (!ONESIGNAL_REST_API_KEY) return;
+  if (!ONESIGNAL_REST_API_KEY || !ONESIGNAL_APP_ID) {
+    console.log('[OneSignal] ⚠️ Chaves ausentes no .env');
+    return;
+  }
   try {
     const filtros = [{ field: 'tag', key: 'loja_id', relation: '=', value: lojaId }];
     if (ignorarEntregador) {
+      // A API do OneSignal EXIGE o operador lógico entre múltiplos filtros
+      filtros.push({ operator: 'AND' });
       filtros.push({ field: 'tag', key: 'cargo', relation: '!=', value: 'Entregador' });
     }
-    await fetch('https://onesignal.com/api/v1/notifications', {
+    
+    const resposta = await fetch('https://onesignal.com/api/v1/notifications', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Key ${ONESIGNAL_REST_API_KEY}` },
       body:    JSON.stringify({ app_id: ONESIGNAL_APP_ID, filters: filtros, headings: { en: titulo }, contents: { en: mensagem } }),
     });
-  } catch (e) { console.error('[OneSignal] Erro:', e); }
+
+    const jsonRes = await resposta.json();
+    if (!resposta.ok || jsonRes.errors) {
+      console.error('[OneSignal] ❌ Erro da API:', jsonRes.errors || jsonRes);
+    } else {
+      console.log(`[OneSignal] ✅ Push enviado. Destinatários:`, jsonRes.recipients);
+    }
+  } catch (e) { 
+    console.error('[OneSignal] ❌ Erro na requisição:', e.message); 
+  }
 }
 
 /**
