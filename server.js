@@ -342,9 +342,9 @@ const _FIELD_MAP = {
              'Tempo_Entrega', 'Ordem', 'criado_em'],
   },
   'taras': {
-    toApp:  { Nome: 'Nome_Tara', Peso_g: 'Gramas' },
-    toDB:   { Nome_Tara: 'Nome', Gramas: 'Peso_g' },
-    dbCols: ['ID_Tara', 'loja_id', 'Nome', 'Peso_g', 'Ativo', 'criado_em'],
+    toApp:  { Nome: 'Nome_Tara', Peso_g: 'Gramas', Foto_URL: 'Foto' },
+    toDB:   { Nome_Tara: 'Nome', Gramas: 'Peso_g', Foto: 'Foto_URL' },
+    dbCols: ['ID_Tara', 'loja_id', 'Nome', 'Peso_g', 'Ativo', 'Foto_URL', 'criado_em'],
   },
 };
 
@@ -460,7 +460,7 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 6. Renomear campos para o Banco
+  // 6. Renomear campos do frontend para nomes de coluna reais
   const map = _FIELD_MAP[nomeColecao];
   if (map?.toDB) {
     for (const [appField, dbCol] of Object.entries(map.toDB)) {
@@ -468,6 +468,14 @@ function _prepararParaDB(nomeColecao, dados) {
         result[dbCol] = result[appField];
         delete result[appField];
       }
+    }
+  }
+
+  // 7. Remover campos desconhecidos (Whitelist)
+  if (map?.dbCols) {
+    const permitidos = new Set([...map.dbCols, 'loja_id']);
+    for (const k of Object.keys(result)) {
+      if (!permitidos.has(k)) delete result[k];
     }
   }
 
