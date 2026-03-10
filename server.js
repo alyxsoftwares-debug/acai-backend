@@ -104,9 +104,26 @@ app.use(express.json());
 // CACHES GLOBAIS DE ALTA PERFORMANCE (Evita sobrecarga no banco)
 // ══════════════════════════════════════════════════════════
 const _cacheSlugs = new Map();       // slug -> { uuid, ts }
-const SLUG_TTL_MS = 60 * 60 * 1000; // 1 hora
+const SLUG_TTL_MS = 60 * 60 * 1000;  // 1 hora
 const _cacheStatusLoja = new Map();  // loja_id -> { status, ts }
 const STATUS_TTL_MS = 5 * 60 * 1000; // 5 minutos de cache para o status
+
+// Rotina de limpeza periódica de chaves órfãs (Evita Memory Leak para >500 Lojas)
+setInterval(() => {
+  const agora = Date.now();
+  for (const [key, val] of _cacheSlugs.entries()) {
+    if (agora - val.ts >= SLUG_TTL_MS) _cacheSlugs.delete(key);
+  }
+  for (const [key, val] of _cacheStatusLoja.entries()) {
+    if (agora - val.ts >= STATUS_TTL_MS) _cacheStatusLoja.delete(key);
+  }
+  // Aplica também a limpeza ao _cacheCardapio
+  if (typeof _cacheCardapio !== 'undefined') {
+    for (const [key, val] of _cacheCardapio.entries()) {
+      if (agora - val.ts >= 15 * 60 * 1000) _cacheCardapio.delete(key);
+    }
+  }
+}, 10 * 60 * 1000); // Roda a cada 10 minutos sem bloquear a thread principal
 
 // ══════════════════════════════════════════════════════════
 // TRADUTOR DE SLUG PARA UUID (URL BONITA)
@@ -346,13 +363,8 @@ function _normalizarRow(nomeColecao, row) {
     }
   }
 
-  // 2. Boolean → 'SIM' / 'NAO'
-  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
-  for (const field of boolFields) {
-    if (typeof result[field] === 'boolean') {
-      result[field] = result[field] ? 'SIM' : 'NAO';
-    }
-  }
+  // 2. Booleanos nativos: O backend retorna o tipo nativo puro do PostgreSQL.
+  // (Certifique-se que o front-end trata adequadamente true/false em vez de 'SIM'/'NAO')
 
   return result;
 }
@@ -379,14 +391,8 @@ function _prepararParaDB(nomeColecao, dados) {
   if (result['status']) result['status'] = result['status'].toString().toUpperCase();
   if (result['origem']) result['origem'] = result['origem'].toString().toUpperCase();
 
-  // 2. 'SIM'/'NAO' → boolean
-  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
-  for (const field of boolFields) {
-    if (field in result && typeof result[field] !== 'boolean') {
-      const s = (result[field] || '').toString().toUpperCase().trim();
-      result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
-    }
-  }
+  // 2. Booleanos nativos: A camada de tradução ineficiente foi removida para garantir pureza de dados.
+  // Assume-se que a payload do front-end já envia booleanos estruturados.
 
   // 3. JSONB: parse strings JSON
   for (const field of ['cliente_info', 'itens_comprados']) {
@@ -722,11 +728,8 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const d = rows[0];
 
-  // Instale: npm install bcrypt
-const bcrypt = require('bcrypt');
-
-// Na verificação de login:
-const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
+  // Na verificação de login:
+  const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
 if (!senhaValida) {
   return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
 }
@@ -1439,13 +1442,21 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
   if (entregAtual && entregAtual.toLowerCase() !== nomeTrimmed.toLowerCase())
     return { sucesso: false, mensagem: `Este pedido já foi pego por ${entregAtual}.`, entregadorAtual: entregAtual };
 
-  const { error } = await supabase
+  // Atualização atómica com trava de estado: só atualiza se o status continuar a ser o que validámos em cima
+  const { data: updateResult, error } = await supabase
     .from('pedidos')
     .update({ entregador_nome: nomeTrimmed, status: 'EM_MONTAGEM' })
     .eq('id_venda', idVenda.toString())
-    .eq('loja_id', lojaId);
+    .eq('loja_id', lojaId)
+    .eq('status', status) // Bloqueio otimista
+    .select();
 
   if (error) throw new Error(`[pegarDelivery:update] ${error.message}`);
+  
+  if (!updateResult || updateResult.length === 0) {
+    return { sucesso: false, mensagem: 'Este pedido acabou de ser aceite por outro entregador.' };
+  }
+
   return { sucesso: true, mensagem: `Pedido atribuído a ${nomeTrimmed}.` };
 }
 
