@@ -1691,7 +1691,7 @@ async function getConfigPix(lojaId) {
  * Body: { usuario, senha }
  * Retorna token JWT com { loja_id, id, nome, cargo }
  */
-app.post('/api/lojas/:loja_id/auth/login', handler(async req => {
+app.post('/api/lojas/:loja_id/auth/login', loginLimiter, handler(async req => {
   const lojaId    = req.params.loja_id;
   const resultado = await validarLogin(lojaId, req.body.usuario, req.body.senha);
 
@@ -1726,12 +1726,14 @@ app.post('/api/lojas/:loja_id/auth/validar-supervisor', handler(req =>
  *   PAYMENT_OVERDUE  → status da loja = 'bloqueado'
  *   PAYMENT_RECEIVED → status da loja = 'ativo'
  */
-app.post('/api/webhooks/asaas', async (req, res) => {
+app.post('/api/webhooSks/asaas', async (req, res) => {
   try {
     const tokenRecebido = req.headers['asaas-access-token'] || req.headers['x-access-token'] || '';
-    if (ASAAS_WEBHOOK_TOKEN && tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
-      console.warn('[Webhook Asaas] Token inválido recebido:', tokenRecebido);
-      return res.status(401).json({ sucesso: false, mensagem: 'Token inválido.' });
+    
+    // Trava de Segurança Absoluta: Se não houver token no .env ou for diferente, bloqueia.
+    if (!ASAAS_WEBHOOK_TOKEN || tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
+      console.warn('[Webhook Asaas] Acesso bloqueado (Token ausente ou inválido).');
+      return res.status(401).json({ sucesso: false, mensagem: 'Acesso não autorizado ao Webhook.' });
     }
 
     const { event, payment } = req.body;
