@@ -1243,7 +1243,7 @@ async function registrarVendaPDV(lojaId, pedido) {
   // Garante timestamp ISO para o campo data_hora
   if (!doc.data_hora) doc.data_hora = new Date().toISOString();
 
-  const res = await salvarRegistro(lojaId, 'pedidos', 'VND', doc, 'id_venda');
+  const res = await salvarRegistro(lojaId, 'pedidos', doc, 'id_venda');
 
   if (res.sucesso && (pedido.origem === 'DELIVERY' || pedido.origem === 'ONLINE')) {
     let isRetirada = false;
@@ -1492,27 +1492,27 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
 // CADASTROS (CRUD genérico por loja)
 // ══════════════════════════════════════════════════════════
 
-const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          'USR', d, 'id_usuario');
+const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          d, 'id_usuario');
 const excluirUsuario        = (lojaId, id) => deletarRegistro(lojaId, 'usuarios', id);
-const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai-categorias',   'CAT', d, 'id_categoria');
+const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai-categorias',   d, 'id_categoria');
 const excluirAcaiCategoria  = (lojaId, id) => deletarRegistro(lojaId, 'acai-categorias', id);
-const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai-ingredientes', 'ING', d, 'id_ingrediente');
+const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai-ingredientes', d, 'id_ingrediente');
 const excluirAcaiIngrediente= (lojaId, id) => deletarRegistro(lojaId, 'acai-ingredientes', id);
-const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai-modelos',      'MOD', d, 'id_modelo');
+const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai-modelos',      d, 'id_modelo');
 const excluirAcaiModelo     = (lojaId, id) => deletarRegistro(lojaId, 'acai-modelos', id);
-const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          'IT',  d, 'id_item');
+const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          d, 'id_item');
 const excluirItemFixo       = (lojaId, id) => deletarRegistro(lojaId, 'cardapio', id);
-const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           'BRR', d, 'id_bairro');
+const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           d, 'id_bairro');
 const excluirBairro         = (lojaId, id) => deletarRegistro(lojaId, 'bairros', id);
-const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            'CUP', d, 'codigo_cupom');
+const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            d, 'codigo_cupom');
 const excluirCupom          = (lojaId, id) => deletarRegistro(lojaId, 'cupons', id);
-const salvarTara            = (lojaId, d) => salvarRegistro(lojaId, 'taras',             'TRA', d, 'id_tara');
+const salvarTara            = (lojaId, d) => salvarRegistro(lojaId, 'taras',             d, 'id_tara');
 const excluirTara           = (lojaId, id) => deletarRegistro(lojaId, 'taras', id);
 
 async function salvarCliente(lojaId, dados) {
   // data_cadastro em ISO para armazenar como TIMESTAMPTZ
   if (!dados.data_cadastro) dados.data_cadastro = new Date().toISOString();
-  return salvarRegistro(lojaId, 'clientes', 'CLI', dados, 'id_cliente');
+  return salvarRegistro(lojaId, 'clientes', dados, 'id_cliente');
 }
 
 async function buscarClientePorCPF(lojaId, cpf) {
