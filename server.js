@@ -57,7 +57,7 @@ const app = express();
 
 const ORIGENS_PERMITIDAS = [
   'https://alyxsoftwares.vercel.app',
-  /\.vercel\.app$/,
+  // Adicione outros domínios específicos conforme necessário
 ];
 
 app.use(cors({
@@ -68,7 +68,15 @@ app.use(cors({
 }));
 
 app.use(express.json());
+const rateLimit = require('express-rate-limit');
 
+const limiterLogin = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 10,
+  message: { sucesso: false, mensagem: 'Muitas tentativas. Aguarde 15 minutos.' },
+});
+
+app.use('/api/lojas/:loja_id/auth/login', limiterLogin);
 
 // ══════════════════════════════════════════════════════════
 // CACHE DE SLUG → UUID (Regra 3: Interceptador de Slug)
@@ -98,7 +106,7 @@ async function slugParaUUID(slug) {
     .single();
 
   if (error || !data) {
-    _slugCache.set(slug, { uuid: null, ts: Date.now() }); // Guarda o erro na memória para não sobrecarregar o banco
+    _slugCache.set(slug, { uuid: null, ts: Date.now() - (SLUG_CACHE_TTL_MS - 30_000) }); // expira em 30s
     return null;
   }
 
@@ -180,15 +188,6 @@ function _resumoVazio() {
     qtdPedidos: 0, porOrigem: {}, porPagamento: {}, porStatus: {}, periodo: {},
   };
 }
-
-/** Lança erro caso o Supabase retorne erro. */
-function _assertOk({ error }, contexto) {
-  if (error) {
-    console.error(`[Supabase/${contexto}]`, error);
-    throw new Error(error.message || 'Erro no banco de dados.');
-  }
-}
-
 
 // ══════════════════════════════════════════════════════════
 // PERMISSÕES POR CARGO
@@ -328,7 +327,10 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const d = usrs[0];
 
-  if ((d.senha || '').toString() !== senhaDigitada.toString()) {
+  const bcrypt = require('bcrypt');
+// ...
+const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
+if (!senhaValida) {
     return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
   }
   if ((d.status || '').toString().toLowerCase() !== 'ativo') {
@@ -392,16 +394,9 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
     frete_gratis: parseFloat(configObj.frete_gratis) || 0
   };
 
-  const { data: existe } = await supabase.from('configuracoes').select('loja_id').eq('loja_id', lojaId).maybeSingle();
-
-  let erroBanco;
-  if (existe) {
-    const { error } = await supabase.from('configuracoes').update(payload).eq('loja_id', lojaId);
-    erroBanco = error;
-  } else {
-    const { error } = await supabase.from('configuracoes').insert(payload);
-    erroBanco = error;
-  }
+  const { error: erroBanco } = await supabase
+    .from('configuracoes')
+    .upsert(payload, { onConflict: 'loja_id' });
 
   if (erroBanco) throw new Error(erroBanco.message);
   invalidarCacheCardapio(lojaId);
@@ -595,9 +590,13 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
   const dtFim = _parseDataDDMMYYYY(dataFim);
   if (!dtIni || !dtFim) return { pedidos: [], resumo: _resumoVazio() };
 
-  // Força o fuso horário de Fortaleza (-03:00) para garantir o "hoje" correto
-  const isoIni = `${dtIni.getFullYear()}-${String(dtIni.getMonth() + 1).padStart(2, '0')}-${String(dtIni.getDate()).padStart(2, '0')}T00:00:00.000-03:00`;
-  const isoFim = `${dtFim.getFullYear()}-${String(dtFim.getMonth() + 1).padStart(2, '0')}-${String(dtFim.getDate()).padStart(2, '0')}T23:59:59.999-03:00`;
+  // Usa Intl para montar o offset correto a partir do TZ configurado
+  function _isoComFuso(date, hora) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${hora}`;
+  }
+  const isoIni = _isoComFuso(dtIni, '00:00:00.000') + '-03:00';
+  const isoFim = _isoComFuso(dtFim, '23:59:59.999') + '-03:00';
 
   const { data: pedidos, error } = await supabase
     .from('pedidos')
@@ -697,31 +696,17 @@ async function buscarPedidos(lojaId, query) {
   const limite60dias = new Date();
   limite60dias.setDate(limite60dias.getDate() - 60);
 
-  const { data: pedidos, error } = await supabase
+  const { data, error } = await supabase
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
     .gte('data_hora', limite60dias.toISOString())
+    .ilike('id_venda', `%${q}%`)
     .order('data_hora', { ascending: false })
-    .limit(500);
+    .limit(50);
 
   if (error) throw new Error(error.message);
-
-  const resultado = [];
-  for (const p of (pedidos || [])) {
-    if (resultado.length >= 50) break;
-
-    // Regra 6: cliente_info e itens_comprados são jsonb — já vêm como objeto/array
-    const cliStr   = JSON.stringify(p.cliente_info    || '').toLowerCase();
-    const itensStr = JSON.stringify(p.itens_comprados || '').toLowerCase();
-    const idStr    = (p.id_venda || '').toLowerCase();
-
-    if (idStr.includes(q) || cliStr.includes(q) || itensStr.includes(q)) {
-      resultado.push(p);
-    }
-  }
-
-  return resultado;
+  return data || [];
 }
 
 async function getAcompanhamentoPedido(lojaId, query) {
@@ -735,12 +720,16 @@ async function getAcompanhamentoPedido(lojaId, query) {
   const limiteHoje = new Date();
   limiteHoje.setHours(0, 0, 0, 0);
 
+  const limite30dias = new Date();
+  limite30dias.setDate(limite30dias.getDate() - 30);
+
   const { data: pedidos, error } = await supabase
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
+    .gte('data_hora', limite30dias.toISOString())
     .order('data_hora', { ascending: false })
-    .limit(500);
+    .limit(200);
 
   if (error) throw new Error(error.message);
 
@@ -848,7 +837,7 @@ async function getDadosPolling(lojaId) {
 // ══════════════════════════════════════════════════════════
 
 const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY || '';
-const ONESIGNAL_APP_ID       = 'c7565fa8-cd8c-4264-85b4-1a9d9cf150af';
+const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID || '';
 
 async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador = false) {
   if (!ONESIGNAL_REST_API_KEY) return;
@@ -906,7 +895,7 @@ async function registrarVendaPDV(lojaId, pedido) {
   if (origemUp === 'DELIVERY' || origemUp === 'ONLINE') {
     const cli = payload.cliente_info;
     const isRetirada = (cli.endereco || '') === 'Retirada na loja';
-    dispararPushOneSignal(
+    void dispararPushOneSignal( // fire-and-forget intencional
       lojaId,
       isRetirada ? '🛍️ Nova Retirada!'            : '🔔 Novo Pedido de Delivery!',
       isRetirada ? 'Cliente vem buscar na loja.' : 'Uma nova entrega caiu no painel.',
@@ -1027,15 +1016,18 @@ async function atualizarStatusPedido(lojaId, idVenda, novoStatus) {
   if (!statusValidos.includes(novoStatus))
     return { sucesso: false, mensagem: `Status inválido: ${novoStatus}` };
 
-  const { error, count } = await supabase
+  const { data, error } = await supabase
     .from('pedidos')
     .update({ status: novoStatus })
     .eq('loja_id', lojaId)
     .eq('id_venda', idVenda)
-    .select('id_venda', { count: 'exact' });
+    .select('id_venda')
+    .single();
 
-  if (error) throw new Error(error.message);
-  if (count === 0) return { sucesso: false, mensagem: `Pedido "${idVenda}" não encontrado.` };
+  if (error) {
+    if (error.code === 'PGRST116') return { sucesso: false, mensagem: `Pedido "${idVenda}" não encontrado.` };
+    throw new Error(error.message);
+  }
   return { sucesso: true };
 }
 
@@ -1281,7 +1273,7 @@ async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
   const config  = await getConfiguracoes(lojaId);
   const modoMP  = (config.pix_modo || 'MANUAL').toUpperCase();
 
-  if (modoMP !== 'AUTO' && modoMP !== 'AUTOMATICO' && modoMP !== 'AUTOMÁTICO') {
+  if (modoMP !== 'AUTO') {
     return finalizarPedidoOnline(lojaId, dadosPedido);
   }
 
@@ -1407,10 +1399,12 @@ app.post('/api/webhooks/asaas', async (req, res) => {
     const lojaId    = lojas[0].id;
     const novoStatus = event === 'PAYMENT_OVERDUE' ? 'bloqueado' : 'ativo';
 
-    await supabase
+    const { error: errUpdate } = await supabase
       .from('lojas')
       .update({ status: novoStatus, ultimo_evento_asaas: event, atualizado_em: _agora() })
       .eq('id', lojaId);
+
+    if (errUpdate) throw new Error(errUpdate.message);
 
     if (novoStatus === 'bloqueado') invalidarCacheCardapio(lojaId);
 
