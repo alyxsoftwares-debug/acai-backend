@@ -101,29 +101,45 @@ app.use(cors({
 app.use(express.json());
 
 // ══════════════════════════════════════════════════════════
+// CACHES GLOBAIS DE ALTA PERFORMANCE (Evita sobrecarga no banco)
+// ══════════════════════════════════════════════════════════
+const _cacheSlugs = new Map();       // slug -> { uuid, ts }
+const SLUG_TTL_MS = 60 * 60 * 1000; // 1 hora
+const _cacheStatusLoja = new Map();  // loja_id -> { status, ts }
+const STATUS_TTL_MS = 5 * 60 * 1000; // 5 minutos de cache para o status
+
+// ══════════════════════════════════════════════════════════
 // TRADUTOR DE SLUG PARA UUID (URL BONITA)
 // Intercepta e reescreve a URL antes do servidor processar
 // ══════════════════════════════════════════════════════════
 app.use(async (req, res, next) => {
   if (req.url.startsWith('/api/lojas/')) {
-    // Isola apenas o nome da loja (ignorando coisas como ?q=busca)
     const urlSemQuery = req.url.split('?')[0]; 
     const partes = urlSemQuery.split('/');
-    const idOuSlug = partes[3]; // Pega a palavra que está na posição da loja
+    const idOuSlug = partes[3]; 
     
     if (idOuSlug && idOuSlug !== 'undefined') {
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOuSlug);
       
       if (!isUUID) {
-        // Se não for UUID, busca no banco de dados qual é o UUID dessa palavra
+        const slugNormalizado = idOuSlug.toLowerCase();
+        
+        // 1. Verifica no Cache Memory (Super rápido)
+        const entradaSlug = _cacheSlugs.get(slugNormalizado);
+        if (entradaSlug && (Date.now() - entradaSlug.ts < SLUG_TTL_MS)) {
+          req.url = req.url.replace(`/api/lojas/${idOuSlug}`, `/api/lojas/${entradaSlug.uuid}`);
+          return next();
+        }
+
+        // 2. Se não tem no cache, busca no banco
         const { data } = await supabase
           .from('lojas')
           .select('id')
-          .eq('slug', idOuSlug.toLowerCase())
+          .eq('slug', slugNormalizado)
           .maybeSingle();
           
         if (data && data.id) {
-          // Engana o servidor trocando a palavra pelo UUID real na URL
+          _cacheSlugs.set(slugNormalizado, data.id); // Salva no cache
           req.url = req.url.replace(`/api/lojas/${idOuSlug}`, `/api/lojas/${data.id}`);
         } else {
           return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo link bonito.' });
@@ -163,12 +179,10 @@ function _parseDataDDMMYYYY(str) {
 
 /**
  * Converte valor de data para objeto Date.
- * Suporta: ISO string do Postgres, string "dd/MM/yyyy HH:mm:ss", Date, e
- * Firestore Timestamp legado (toDate()).
+ * Suporta: ISO string do Postgres, string "dd/MM/yyyy HH:mm:ss", Date.
  */
 function _toDate(valor) {
   if (!valor) return null;
-  if (typeof valor.toDate === 'function') return valor.toDate(); // Firestore legado
   if (valor instanceof Date) return isNaN(valor.getTime()) ? null : valor;
   const str = valor.toString().trim();
   if (!str) return null;
@@ -392,12 +406,14 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 5. TRADUTOR DE DATA (Converte 30/04/2026 para 2026-04-30 automaticamente)
+  // 5. TRADUTOR DE DATA COM HORA (Evita bug de conversão "2026 15:30-04-30")
   for (const field of ['validade', 'data_hora', 'data_cadastro']) {
     if (result[field] && typeof result[field] === 'string' && result[field].includes('/')) {
-      const partes = result[field].split('/');
+      const [dataStr, horaStr] = result[field].split(' ');
+      const partes = dataStr.split('/');
       if (partes.length === 3) {
-        result[field] = `${partes[2]}-${partes[1]}-${partes[0]}`;
+        const dataIso = `${partes[2]}-${partes[1]}-${partes[0]}`;
+        result[field] = horaStr ? `${dataIso} ${horaStr}` : dataIso;
       }
     }
   }
@@ -413,14 +429,27 @@ function _prepararParaDB(nomeColecao, dados) {
  * Lê todos os registros de uma tabela filtrados por loja_id.
  * Equivalente ao lerSubcolecao() do Firestore.
  */
+// Limite seguro por coleção (ajuste conforme necessidade real do negócio)
+const _LIMITE_COLECAO = {
+  'pedidos':           500,
+  'clientes':          1000,
+  'cardapio':          500,
+  'acai-ingredientes': 300,
+  'cupons':            200,
+};
+const _LIMITE_DEFAULT = 500;
+
 async function lerSubcolecao(lojaId, nomeColecao) {
   const tabela = _TABLE_MAP[nomeColecao];
   if (!tabela) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
 
+  const limite = _LIMITE_COLECAO[nomeColecao] ?? _LIMITE_DEFAULT;
+
   const { data, error } = await supabase
     .from(tabela)
     .select('*')
-    .eq('loja_id', lojaId);
+    .eq('loja_id', lojaId)
+    .limit(limite);
 
   if (error) throw new Error(`[lerSubcolecao:${nomeColecao}] ${error.message}`);
   return (data || []).map(row => _normalizarRow(nomeColecao, row));
@@ -448,7 +477,7 @@ async function getConfiguracoes(lojaId) {
  * - Para cupons (PK composta), usa upsert.
  * Equivalente ao salvarRegistro() do Firestore.
  */
-async function salvarRegistro(lojaId, nomeColecao, _idPrefixo, dadosObj, campoId) {
+async function salvarRegistro(lojaId, nomeColecao, dadosObj, campoId) {
   const tabela = _TABLE_MAP[nomeColecao];
   if (!tabela) throw new Error(`Coleção desconhecida: ${nomeColecao}`);
 
@@ -615,19 +644,27 @@ async function verificarStatusLoja(req, res, next) {
   if (!lojaId) return next();
 
   try {
-    const { data: loja, error } = await supabase
-      .from('lojas')
-      .select('status')
-      .eq('id', lojaId)
-      .maybeSingle();
+    // 1. Verifica o Cache para não afogar o Banco de Dados
+    const cached = _cacheStatusLoja.get(lojaId);
+    let status = 'ativo';
 
-    if (error) throw error;
+    if (cached && (Date.now() - cached.ts < STATUS_TTL_MS)) {
+      status = cached.status;
+    } else {
+      // 2. Se não estiver no cache (ou expirou), vai ao banco
+      const { data: loja, error } = await supabase
+        .from('lojas')
+        .select('status')
+        .eq('id', lojaId)
+        .maybeSingle();
 
-    if (!loja) {
-      return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada.' });
+      if (error) throw error;
+      if (!loja) return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada.' });
+
+      status = (loja.status || 'ativo').toLowerCase();
+      _cacheStatusLoja.set(lojaId, { status, ts: Date.now() });
     }
 
-    const status = (loja.status || 'ativo').toLowerCase();
     if (status === 'bloqueado') {
       return res.status(403).json({
         sucesso: false,
@@ -685,10 +722,17 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const d = rows[0];
 
-  // Verificação de senha em texto puro (fase 1 da migração)
-  if ((d.senha || '').toString() !== senhaDigitada.toString()) {
-    return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
-  }
+  // Instale: npm install bcrypt
+const bcrypt = require('bcrypt');
+
+// Na verificação de login:
+const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
+if (!senhaValida) {
+  return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
+}
+
+// Na criação/atualização de usuário (em salvarUsuario), hash antes de salvar:
+// dados.senha = await bcrypt.hash(dados.senha, 12);
 
   // Status do usuário (Postgres armazena 'ativo'/'inativo')
   if ((d.status || '').toString().toLowerCase() !== 'ativo') {
@@ -711,6 +755,7 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
   const cargo = (d.cargo || '').toString();
   return {
     sucesso:     true,
+    id_usuario:  d.id_usuario,   // ← ADICIONAR esta linha
     cargo,
     nome:        (d.nome || '').toString(),
     foto_perfil: (d.foto_perfil || '').toString(),
@@ -812,7 +857,7 @@ async function getCardapioClienteCache(lojaId) {
       frete_gratis:            config['frete_gratis']            || '0',
       tempo_entrega:           config['tempo_entrega']           || '',
     },
-    prontos:      prontos.filter(i => i.disponivel === 'SIM' && (i.mostrar_online || 'SIM') !== 'NÃO'),
+    prontos:      prontos.filter(i => i.disponivel === 'SIM' && (i.mostrar_online || 'SIM') !== 'NAO'),
     tamanhos:     tamanhos.filter(m => m.disponivel === 'SIM'),
     categorias,
     ingredientes: ingredientes.filter(i => i.disponivel === 'SIM'),
@@ -1700,7 +1745,7 @@ app.post('/api/lojas/:loja_id/auth/login', loginLimiter, handler(async req => {
 
   if (resultado.sucesso) {
     resultado.token = jwt.sign(
-      { loja_id: lojaId, id: req.body.usuario, nome: resultado.nome, cargo: resultado.cargo },
+      { loja_id: lojaId, id: resultado.id_usuario, nome: resultado.nome, cargo: resultado.cargo },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
@@ -1712,7 +1757,7 @@ app.post('/api/lojas/:loja_id/auth/login', loginLimiter, handler(async req => {
  * POST /api/lojas/:loja_id/auth/validar-supervisor
  * Body: { login, senha }
  */
-app.post('/api/lojas/:loja_id/auth/validar-supervisor', handler(req =>
+app.post('/api/lojas/:loja_id/auth/validar-supervisor', loginLimiter, handler(req =>
   validarSupervisorOuAcima(req.params.loja_id, req.body.login, req.body.senha)
 ));
 
@@ -1777,7 +1822,9 @@ app.post('/api/webhooks/asaas', async (req, res) => {
     if (errUpdate) throw errUpdate;
 
     // Invalida cache se bloqueou
-    if (novoStatus === 'bloqueado') invalidarCacheCardapio(lojaId);
+    // Invalida AMBOS os caches em qualquer mudança de status
+    _cacheStatusLoja.delete(lojaId);
+    invalidarCacheCardapio(lojaId);
 
     console.log(`[Webhook Asaas] Loja "${lojaId}" → status "${novoStatus}" (evento: ${event})`);
     return res.json({ sucesso: true, lojaId, novoStatus });
@@ -1802,6 +1849,7 @@ app.get('/api/lojas/:loja_id/dados-config',
   handler(req => getDadosConfig(req.params.loja_id)));
 
 app.get('/api/lojas/:loja_id/dados-monte-acai',
+  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
   handler(req => getDadosMonteAcai(req.params.loja_id)));
 
 // Rota pública do cardápio (sem autenticação — verifica status via middleware próprio)
@@ -2008,13 +2056,19 @@ app.get('/api/lojas/:loja_id/pedidos/relatorio',
 // ROTAS — MERCADO PAGO / PIX
 // ══════════════════════════════════════════════════════════
 
+// /pix/gerar é interno (PDV) → exige login de operador
 app.post('/api/lojas/:loja_id/pix/gerar',
+  ...guardCargo('Dono', 'Gerente', 'Supervisor', 'Operador'),
   handler(req => gerarPixMP(req.params.loja_id, req.body.total, req.body.idVenda, req.body.emailPagador)));
 
+// /pix/verificar é chamado pelo cliente online → verifica apenas status da loja
 app.get('/api/lojas/:loja_id/pix/verificar/:idPagamento',
+  verificarStatusLoja,
   handler(req => verificarPagamentoMP(req.params.loja_id, req.params.idPagamento)));
 
+// /pix/confirmar é chamado pelo cliente online → verifica apenas status da loja
 app.post('/api/lojas/:loja_id/pix/confirmar',
+  verificarStatusLoja,
   handler(req => confirmarPagamentoELiberarPedido(req.params.loja_id, req.body.idVenda, req.body.idPagamento)));
 
 
