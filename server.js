@@ -1552,6 +1552,13 @@ async function buscarClientePorTelefone(lojaId, telefone) {
 }
 
 async function salvarConfiguracoesLote(lojaId, configObj) {
+  // Normaliza PIX_Modo: 'AUTO'/'AUTOMATICO'/'auto' → sempre 'AUTO' ou 'MANUAL'
+  if (configObj['PIX_Modo'] !== undefined) {
+    const m = (configObj['PIX_Modo'] || 'MANUAL').toString().toUpperCase().trim();
+    configObj['PIX_Modo'] = (m === 'AUTO' || m === 'AUTOMATICO' || m === 'AUTOMÁTICO')
+      ? 'AUTO' : 'MANUAL';
+  }
+
   // configuracoes usa loja_id como PK → upsert direto
   const dbData = _prepararParaDB('configuracoes', { ...configObj, loja_id: lojaId });
 
