@@ -37,6 +37,7 @@ const express         = require('express');
 const cors            = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const jwt             = require('jsonwebtoken');
+const rateLimit       = require('express-rate-limit');
 require('dotenv').config();
 
 
@@ -76,9 +77,18 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const app = express();
 
+// Diz ao Express para confiar no Proxy do Render/Vercel (Evita bloquear todo mundo)
+app.set('trust proxy', 1);
+
+// Escudo contra Força Bruta no Login (Bloqueia após 5 tentativas erradas por 15 min)
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 5,
+  message: { sucesso: false, mensagem: 'Muitas tentativas de login. Por segurança, aguarde 15 minutos.' }
+});
+
 const ORIGENS_PERMITIDAS = [
-  'https://alyxsoftwares.vercel.app',
-  /\.vercel\.app$/,
+  'https://alyxsoftwares.vercel.app'
 ];
 
 app.use(cors({
@@ -128,13 +138,6 @@ app.use(async (req, res, next) => {
 // ══════════════════════════════════════════════════════════
 // UTILITÁRIOS INTERNOS
 // ══════════════════════════════════════════════════════════
-
-/** Gera ID único: prefixo + 8 dígitos do timestamp + 4 dígitos aleatórios. */
-function _gerarId(prefixo) {
-  const ts   = Date.now().toString().slice(-8);
-  const rand = Math.floor(Math.random() * 9000 + 1000).toString();
-  return `${prefixo}-${ts}${rand}`;
-}
 
 /** Retorna "dd/MM/yyyy HH:mm:ss" no fuso configurado. */
 function _agora() {
@@ -1726,7 +1729,7 @@ app.post('/api/lojas/:loja_id/auth/validar-supervisor', handler(req =>
  *   PAYMENT_OVERDUE  → status da loja = 'bloqueado'
  *   PAYMENT_RECEIVED → status da loja = 'ativo'
  */
-app.post('/api/webhooSks/asaas', async (req, res) => {
+app.post('/api/webhooks/asaas', async (req, res) => {
   try {
     const tokenRecebido = req.headers['asaas-access-token'] || req.headers['x-access-token'] || '';
     
