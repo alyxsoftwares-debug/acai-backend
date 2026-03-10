@@ -270,31 +270,31 @@ const _TABLE_MAP = {
 
 /** Coluna de chave primária por coleção. */
 const _PK_MAP = {
-  'usuarios':          'ID_Usuario',
-  'pedidos':           'ID_Venda',
-  'cardapio':          'ID_Item',
-  'acai-categorias':   'ID_Categoria',
-  'acai-ingredientes': 'ID_Ingrediente',
-  'acai-modelos':      'ID_Modelo',
-  'bairros':           'ID_Bairro',
-  'cupons':            'Codigo_Cupom',
-  'taras':             'ID_Tara',
-  'clientes':          'ID_Cliente',
+  'usuarios':          'id_usuario',
+  'pedidos':           'id_venda',
+  'cardapio':          'id_item',
+  'acai-categorias':   'id_categoria',
+  'acai-ingredientes': 'id_ingrediente',
+  'acai-modelos':      'id_modelo',
+  'bairros':           'id_bairro',
+  'cupons':            'codigo_cupom',
+  'taras':             'id_tara',
+  'clientes':          'id_cliente',
 };
 
 /**
  * Coleções cujos campos booleanos no Postgres devem ser expostos como
- * 'SIM' / 'NAO' para o frontend (retrocompatibilidade com Firestore).
+ * 'SIM' / 'NAO' para o frontend.
  */
 const _BOOL_SIM_NAO = {
-  'acai-ingredientes': ['Disponivel'],
-  'acai-modelos':      ['Disponivel'],
-  'cardapio':          ['Disponivel', 'Mostrar_Online'],
-  'bairros':           ['Disponivel'],
-  'taras':             ['Ativo'],
-  'cupons':            ['Ativo', 'Usar_Cardapio'],
-  'acai-categorias':   ['Ativo'],
-  'configuracoes':     ['Retirada_Loja_Ativo', 'AutoImprimir_Balcao', 'AutoImprimir_Delivery', 'Mostrar_AcaiRapido_PDV'],
+  'acai-ingredientes': ['disponivel'],
+  'acai-modelos':      ['disponivel'],
+  'cardapio':          ['disponivel', 'mostrar_online'],
+  'bairros':           ['disponivel'],
+  'taras':             ['ativo'],
+  'cupons':            ['ativo', 'usar_cardapio'],
+  'acai-categorias':   ['ativo'],
+  'configuracoes':     ['retirada_loja_ativo', 'autoimprimir_balcao', 'autoimprimir_delivery', 'mostrar_acai_rapido_pdv'],
 };
 
 /** Coleções cujo cache de cardápio deve ser invalidado após escrita. */
@@ -303,50 +303,7 @@ const _CACHE_COLS = new Set([
   'acai-ingredientes', 'bairros', 'configuracoes', 'cupons',
 ]);
 
-/**
- * Mapeamento bidirecional entre nomes de campo do frontend (Firestore legado)
- * e nomes de coluna reais no Postgres.
- *
- * toApp  → renomear coluna DB para o nome que o frontend espera (leitura)
- * toDB   → renomear campo do frontend para o nome da coluna DB (escrita)
- * dbCols → whitelist de colunas válidas da tabela (evita erro de coluna desconhecida)
- */
-const _FIELD_MAP = {
-  'acai-categorias': {
-    toApp:  { Nome: 'Nome_Categoria' },
-    toDB:   { Nome_Categoria: 'Nome' },
-    dbCols: ['ID_Categoria', 'loja_id', 'Nome', 'Ordem', 'Ativo', 'criado_em'],
-  },
-  'acai-ingredientes': {
-    toApp:  { categoria_id: 'ID_Categoria', Foto_URL: 'Foto' },
-    toDB:   { ID_Categoria: 'categoria_id', Foto: 'Foto_URL' },
-    dbCols: ['ID_Ingrediente', 'loja_id', 'categoria_id', 'Nome', 'Disponivel',
-             'Ordem', 'Foto_URL', 'Descricao', 'Preco', 'criado_em', 'atualizado_em'],
-  },
-  'acai-modelos': {
-    toApp:  { Preco: 'Preco_Base', Foto_URL: 'Foto' },
-    toDB:   { Preco_Base: 'Preco', Foto: 'Foto_URL' },
-    dbCols: ['ID_Modelo', 'loja_id', 'Nome', 'Descricao', 'Capacidade_ml',
-             'Preco', 'Disponivel', 'Ordem', 'Foto_URL', 'criado_em', 'atualizado_em'],
-  },
-  'cardapio': {
-    toApp:  { Foto_URL: 'Foto' },
-    toDB:   { Foto: 'Foto_URL' },
-    dbCols: ['ID_Item', 'loja_id', 'Nome', 'Descricao', 'Preco', 'Categoria',
-             'Disponivel', 'Mostrar_Online', 'Foto_URL', 'Ordem', 'criado_em', 'atualizado_em'],
-  },
-  'bairros': {
-    toApp:  { Nome: 'Nome_Bairro', Taxa_Entrega: 'Taxa_R$' },
-    toDB:   { Nome_Bairro: 'Nome', 'Taxa_R$': 'Taxa_Entrega' },
-    dbCols: ['ID_Bairro', 'loja_id', 'Nome', 'Taxa_Entrega', 'Disponivel',
-             'Tempo_Entrega', 'Ordem', 'criado_em'],
-  },
-  'taras': {
-    toApp:  { Nome: 'Nome_Tara', Peso_g: 'Gramas', Foto_URL: 'Foto' },
-    toDB:   { Nome_Tara: 'Nome', Gramas: 'Peso_g', Foto: 'Foto_URL' },
-    dbCols: ['ID_Tara', 'loja_id', 'Nome', 'Peso_g', 'Ativo', 'Foto_URL', 'criado_em'],
-  },
-};
+
 
 
 // ══════════════════════════════════════════════════════════
@@ -357,7 +314,6 @@ const _FIELD_MAP = {
  * Normaliza uma linha do Postgres para o formato esperado pelo frontend:
  * - TIMESTAMPTZ ISO → "dd/MM/yyyy HH:mm:ss"
  * - BOOLEAN → 'SIM' / 'NAO' para campos mapeados em _BOOL_SIM_NAO
- * - usuarios.Status: 'ativo' → 'Ativo' (capitalização original do Firestore)
  */
 function _normalizarRow(nomeColecao, row) {
   if (!row) return row;
@@ -381,23 +337,6 @@ function _normalizarRow(nomeColecao, row) {
     }
   }
 
-  // 3. usuarios.Status: 'ativo' → 'Ativo' (formato original)
-  if (nomeColecao === 'usuarios' && typeof result['Status'] === 'string') {
-    const s = result['Status'].toLowerCase();
-    result['Status'] = s === 'ativo' ? 'Ativo' : 'inativo';
-  }
-
-  // 4. Renomear colunas DB → nomes que o frontend espera (retrocompatibilidade)
-  const map = _FIELD_MAP[nomeColecao];
-  if (map?.toApp) {
-    for (const [dbCol, appField] of Object.entries(map.toApp)) {
-      if (dbCol in result) {
-        result[appField] = result[dbCol];
-        delete result[dbCol];
-      }
-    }
-  }
-
   return result;
 }
 
@@ -406,7 +345,7 @@ function _normalizarRow(nomeColecao, row) {
  * - 'SIM'/'NAO' → boolean
  * - String JSON → objeto para colunas JSONB
  * - '' → null para colunas UUID (FK)
- * - usuarios.Status: normaliza para lowercase (CHECK constraint)
+ * - status/origem: normaliza para maiúsculas (valores enum)
  */
 
 function _prepararParaDB(nomeColecao, dados) {
@@ -419,9 +358,9 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 1. Normalização de Status e Origem
-  if (result['Status']) result['Status'] = result['Status'].toString().toUpperCase();
-  if (result['Origem']) result['Origem'] = result['Origem'].toString().toUpperCase();
+  // 1. Normalização de status e origem (garante maiúsculas para validação)
+  if (result['status']) result['status'] = result['status'].toString().toUpperCase();
+  if (result['origem']) result['origem'] = result['origem'].toString().toUpperCase();
 
   // 2. 'SIM'/'NAO' → boolean
   const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
@@ -433,10 +372,10 @@ function _prepararParaDB(nomeColecao, dados) {
   }
 
   // 3. JSONB: parse strings JSON
-  for (const field of ['Cliente_Info', 'Itens_Comprados']) {
+  for (const field of ['cliente_info', 'itens_comprados']) {
     if (field in result && typeof result[field] === 'string') {
       if (!result[field]) {
-        result[field] = field === 'Itens_Comprados' ? [] : null;
+        result[field] = field === 'itens_comprados' ? [] : null;
       } else {
         try { result[field] = JSON.parse(result[field]); } catch { }
       }
@@ -444,38 +383,19 @@ function _prepararParaDB(nomeColecao, dados) {
   }
 
   // 4. UUID FK vazio → null
-  for (const field of ['ID_Tara', 'categoria_id', 'ID_Categoria']) {
+  for (const field of ['id_tara', 'categoria_id']) {
     if (field in result && (result[field] === '' || result[field] === undefined)) {
       result[field] = null;
     }
   }
 
   // 5. TRADUTOR DE DATA (Converte 30/04/2026 para 2026-04-30 automaticamente)
-  for (const field of ['Validade', 'Data_Hora', 'Data_Cadastro']) {
+  for (const field of ['validade', 'data_hora', 'data_cadastro']) {
     if (result[field] && typeof result[field] === 'string' && result[field].includes('/')) {
       const partes = result[field].split('/');
       if (partes.length === 3) {
         result[field] = `${partes[2]}-${partes[1]}-${partes[0]}`;
       }
-    }
-  }
-
-  // 6. Renomear campos do frontend para nomes de coluna reais
-  const map = _FIELD_MAP[nomeColecao];
-  if (map?.toDB) {
-    for (const [appField, dbCol] of Object.entries(map.toDB)) {
-      if (appField in result) {
-        result[dbCol] = result[appField];
-        delete result[appField];
-      }
-    }
-  }
-
-  // 7. Remover campos desconhecidos (Whitelist)
-  if (map?.dbCols) {
-    const permitidos = new Set([...map.dbCols, 'loja_id']);
-    for (const k of Object.keys(result)) {
-      if (!permitidos.has(k)) delete result[k];
     }
   }
 
@@ -535,18 +455,18 @@ async function salvarRegistro(lojaId, nomeColecao, _idPrefixo, dadosObj, campoId
   // Prepara payload com loja_id e conversões de tipos
   const dbData = _prepararParaDB(nomeColecao, { ...dadosObj, loja_id: lojaId });
 
-  // Cupons têm PK composta (Codigo_Cupom, loja_id) → sempre upsert
+  // Cupons têm PK composta (codigo_cupom, loja_id) → sempre upsert
   if (nomeColecao === 'cupons') {
-    if (!dbData['Codigo_Cupom']?.toString().trim())
+    if (!dbData['codigo_cupom']?.toString().trim())
       return { sucesso: false, mensagem: 'Código do cupom é obrigatório.' };
 
     const { error } = await supabase
       .from(tabela)
-      .upsert(dbData, { onConflict: 'Codigo_Cupom,loja_id' });
+      .upsert(dbData, { onConflict: 'codigo_cupom,loja_id' });
 
     if (error) throw new Error(`[salvarCupom] ${error.message}`);
     invalidarCacheCardapio(lojaId);
-    return { sucesso: true, mensagem: 'Cupom salvo!', id: dbData['Codigo_Cupom'] };
+    return { sucesso: true, mensagem: 'Cupom salvo!', id: dbData['codigo_cupom'] };
   }
 
   if (ehNovo) {
@@ -753,7 +673,7 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
     .from('usuarios')
     .select('*')
     .eq('loja_id', lojaId)
-    .ilike('Login', loginNorm)
+    .ilike('login', loginNorm)
     .limit(1);
 
   if (error) throw new Error(`[validarLogin] ${error.message}`);
@@ -763,12 +683,12 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
   const d = rows[0];
 
   // Verificação de senha em texto puro (fase 1 da migração)
-  if ((d.Senha || '').toString() !== senhaDigitada.toString()) {
+  if ((d.senha || '').toString() !== senhaDigitada.toString()) {
     return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
   }
 
   // Status do usuário (Postgres armazena 'ativo'/'inativo')
-  if ((d.Status || '').toString().toLowerCase() !== 'ativo') {
+  if ((d.status || '').toString().toLowerCase() !== 'ativo') {
     return { sucesso: false, mensagem: 'Acesso bloqueado. Contate a gerência.' };
   }
 
@@ -785,12 +705,12 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
     return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
   }
 
-  const cargo = (d.Cargo || '').toString();
+  const cargo = (d.cargo || '').toString();
   return {
     sucesso:    true,
     cargo,
-    nome:       (d.Nome || '').toString(),
-    fotoPerfil: (d.Foto_Perfil || '').toString(),
+    nome:       (d.nome || '').toString(),
+    fotoPerfil: (d.foto_perfil || '').toString(),
     permissoes: getPermissoesCargo(cargo),
   };
 }
@@ -871,29 +791,29 @@ async function getCardapioClienteCache(lojaId) {
 
   const pacote = {
     configuracoes: {
-      URL_Logo:               config['URL_Logo']               || '',
-      Hora_Abre:              config['Hora_Abre']              || '',
-      Hora_Fecha:             config['Hora_Fecha']             || '',
-      Status_Loja:            config['Status_Loja']            || '',
-      Nome_Loja:              config['Nome_Loja']              || '',
-      WhatsApp_Numero:        config['WhatsApp_Numero']        || '',
-      Retirada_Loja_Ativo:    config['Retirada_Loja_Ativo']    || '',
-      Endereco_Loja:          config['Endereco_Loja']          || '',
-      Instagram_URL:          config['Instagram_URL']          || '',
-      WhatsApp_Link:          config['WhatsApp_Link']          || '',
-      Facebook_URL:           config['Facebook_URL']           || '',
-      Mostrar_AcaiRapido_PDV: config['Mostrar_AcaiRapido_PDV'] || 'SIM',
-      Preco_KG:               config['Preco_KG']               || '39.90',
-      AutoImprimir_Balcao:    config['AutoImprimir_Balcao']    || 'NAO',
-      AutoImprimir_Delivery:  config['AutoImprimir_Delivery']  || 'NAO',
-      Frete_Gratis:           config['Frete_Gratis']           || '0',
-      Tempo_Entrega:          config['Tempo_Entrega']          || '',
+      url_logo:                config['url_logo']                || '',
+      hora_abre:               config['hora_abre']               || '',
+      hora_fecha:              config['hora_fecha']              || '',
+      status_loja:             config['status_loja']             || '',
+      nome_loja:               config['nome_loja']               || '',
+      whatsapp_numero:         config['whatsapp_numero']         || '',
+      retirada_loja_ativo:     config['retirada_loja_ativo']     || '',
+      endereco_loja:           config['endereco_loja']           || '',
+      instagram_url:           config['instagram_url']           || '',
+      whatsapp_link:           config['whatsapp_link']           || '',
+      facebook_url:            config['facebook_url']            || '',
+      mostrar_acai_rapido_pdv: config['mostrar_acai_rapido_pdv'] || 'SIM',
+      preco_kg:                config['preco_kg']                || '39.90',
+      autoimprimir_balcao:     config['autoimprimir_balcao']     || 'NAO',
+      autoimprimir_delivery:   config['autoimprimir_delivery']   || 'NAO',
+      frete_gratis:            config['frete_gratis']            || '0',
+      tempo_entrega:           config['tempo_entrega']           || '',
     },
-    prontos:      prontos.filter(i => i.Disponivel === 'SIM' && (i.Mostrar_Online || 'SIM') !== 'NÃO'),
-    tamanhos:     tamanhos.filter(m => m.Disponivel === 'SIM'),
+    prontos:      prontos.filter(i => i.disponivel === 'SIM' && (i.mostrar_online || 'SIM') !== 'NÃO'),
+    tamanhos:     tamanhos.filter(m => m.disponivel === 'SIM'),
     categorias,
-    ingredientes: ingredientes.filter(i => i.Disponivel === 'SIM'),
-    bairros:      bairros.filter(b => b.Disponivel === 'SIM'),
+    ingredientes: ingredientes.filter(i => i.disponivel === 'SIM'),
+    bairros:      bairros.filter(b => b.disponivel === 'SIM'),
   };
 
   _setCacheCardapio(lojaId, pacote);
@@ -910,8 +830,8 @@ async function getDeliveryEmAndamento(lojaId) {
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
-    .in('Origem', ['DELIVERY', 'ONLINE'])
-    .gte('Data_Hora', limite7d.toISOString());
+    .in('origem', ['DELIVERY', 'ONLINE'])
+    .gte('data_hora', limite7d.toISOString());
 
   if (error) throw new Error(`[getDeliveryEmAndamento] ${error.message}`);
 
@@ -921,8 +841,8 @@ async function getDeliveryEmAndamento(lojaId) {
   return (data || [])
     .map(p => _normalizarTimestamps({ ...p }))
     .filter(p => {
-      const st = (p.Status || '').toUpperCase();
-      const dt = _toDate(p.Data_Hora);
+      const st = (p.status || '').toUpperCase();
+      const dt = _toDate(p.data_hora);
 
       if (st === 'CANCELADO') return false;
       if (st === 'ENTREGUE') {
@@ -963,9 +883,9 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
-    .gte('Data_Hora', dtIni.toISOString())
-    .lte('Data_Hora', dtFim.toISOString())
-    .order('Data_Hora', { ascending: false });
+    .gte('data_hora', dtIni.toISOString())
+    .lte('data_hora', dtFim.toISOString())
+    .order('data_hora', { ascending: false });
 
   if (error) throw new Error(`[getPedidosPorPeriodo] ${error.message}`);
 
@@ -979,11 +899,11 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
     const row = _normalizarTimestamps({ ...p });
     pedidos.push(row);
 
-    const tot    = parseFloat(p.Total_Final || 0);
-    const desc   = parseFloat(p.Desconto    || 0);
-    const origem = (p.Origem           || '').toUpperCase();
-    const pgto   = (p.Metodo_Pagamento || '').toUpperCase();
-    const status = (p.Status           || '').toUpperCase();
+    const tot    = parseFloat(p.total_final || 0);
+    const desc   = parseFloat(p.desconto    || 0);
+    const origem = (p.origem           || '').toUpperCase();
+    const pgto   = (p.metodo_pagamento || '').toUpperCase();
+    const status = (p.status           || '').toUpperCase();
 
     if (status !== 'CANCELADO') { totalDia += tot; totalDesc += desc; }
     contOrigem[origem] = (contOrigem[origem] || 0) + 1;
@@ -991,7 +911,7 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
     contStatus[status] = (contStatus[status]  || 0) + 1;
   }
 
-  const qtdAtivos = pedidos.filter(p => (p.Status || '').toUpperCase() !== 'CANCELADO').length;
+  const qtdAtivos = pedidos.filter(p => (p.status || '').toUpperCase() !== 'CANCELADO').length;
 
   return {
     pedidos,
@@ -1015,22 +935,22 @@ async function getRelatorioAvancado(lojaId, params) {
   const base = await getPedidosPorPeriodo(lojaId, params.dataInicio, params.dataFim);
   let pedidos = base.pedidos;
 
-  if (params.pagamento?.trim()) pedidos = pedidos.filter(p => (p.Metodo_Pagamento || '').toUpperCase() === params.pagamento.toUpperCase());
-  if (params.operador?.trim())  pedidos = pedidos.filter(p => (p.Operador || '').toLowerCase().includes(params.operador.toLowerCase()));
-  if (params.origem?.trim())    pedidos = pedidos.filter(p => (p.Origem || '').toUpperCase() === params.origem.toUpperCase());
-  if (params.status?.trim())    pedidos = pedidos.filter(p => (p.Status || '').toUpperCase() === params.status.toUpperCase());
+  if (params.pagamento?.trim()) pedidos = pedidos.filter(p => (p.metodo_pagamento || '').toUpperCase() === params.pagamento.toUpperCase());
+  if (params.operador?.trim())  pedidos = pedidos.filter(p => (p.operador || '').toLowerCase().includes(params.operador.toLowerCase()));
+  if (params.origem?.trim())    pedidos = pedidos.filter(p => (p.origem || '').toUpperCase() === params.origem.toUpperCase());
+  if (params.status?.trim())    pedidos = pedidos.filter(p => (p.status || '').toUpperCase() === params.status.toUpperCase());
 
   let totalVendas = 0, totalDescontos = 0;
   const porOrigem = {}, porPagamento = {}, porStatus = {}, porOperador = {};
 
   for (const p of pedidos) {
-    const st = (p.Status           || '').toUpperCase();
-    const og = (p.Origem           || '').toUpperCase();
-    const pg = (p.Metodo_Pagamento || '').toUpperCase();
-    const op = (p.Operador         || '').toString();
+    const st = (p.status           || '').toUpperCase();
+    const og = (p.origem           || '').toUpperCase();
+    const pg = (p.metodo_pagamento || '').toUpperCase();
+    const op = (p.operador         || '').toString();
     if (st !== 'CANCELADO') {
-      totalVendas    += parseFloat(p.Total_Final || 0);
-      totalDescontos += parseFloat(p.Desconto    || 0);
+      totalVendas    += parseFloat(p.total_final || 0);
+      totalDescontos += parseFloat(p.desconto    || 0);
     }
     porOrigem[og]    = (porOrigem[og]    || 0) + 1;
     porPagamento[pg] = (porPagamento[pg] || 0) + 1;
@@ -1038,7 +958,7 @@ async function getRelatorioAvancado(lojaId, params) {
     porOperador[op]  = (porOperador[op]  || 0) + 1;
   }
 
-  const qtdAtivos = pedidos.filter(p => (p.Status || '').toUpperCase() !== 'CANCELADO').length;
+  const qtdAtivos = pedidos.filter(p => (p.status || '').toUpperCase() !== 'CANCELADO').length;
 
   return {
     pedidos,
@@ -1065,8 +985,8 @@ async function buscarPedidos(lojaId, query) {
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
-    .gte('Data_Hora', limite60.toISOString())
-    .order('Data_Hora', { ascending: false })
+    .gte('data_hora', limite60.toISOString())
+    .order('data_hora', { ascending: false })
     .limit(200); // Pré-limita no banco para não sobrecarregar
 
   if (error) throw new Error(`[buscarPedidos] ${error.message}`);
@@ -1075,10 +995,10 @@ async function buscarPedidos(lojaId, query) {
   for (const p of (data || [])) {
     if (resultado.length >= 50) break;
 
-    const idStr    = (p.ID_Venda || '').toString().toLowerCase();
+    const idStr    = (p.id_venda || '').toString().toLowerCase();
     // JSONB vem como objeto do Postgres → serializa para busca textual
-    const cliStr   = JSON.stringify(p.Cliente_Info    || {}).toLowerCase();
-    const itensStr = JSON.stringify(p.Itens_Comprados || []).toLowerCase();
+    const cliStr   = JSON.stringify(p.cliente_info    || {}).toLowerCase();
+    const itensStr = JSON.stringify(p.itens_comprados || []).toLowerCase();
 
     if (idStr.includes(q) || cliStr.includes(q) || itensStr.includes(q)) {
       resultado.push(_normalizarTimestamps({ ...p }));
@@ -1107,8 +1027,8 @@ async function getAcompanhamentoPedido(lojaId, query) {
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
-    .ilike('ID_Venda', `%${q}%`)
-    .gte('Data_Hora', limite30.toISOString())
+    .ilike('id_venda', `%${q}%`)
+    .gte('data_hora', limite30.toISOString())
     .limit(5);
 
   // Busca por telefone no campo JSONB (somente pedidos de hoje)
@@ -1118,8 +1038,8 @@ async function getAcompanhamentoPedido(lojaId, query) {
       .from('pedidos')
       .select('*')
       .eq('loja_id', lojaId)
-      .gte('Data_Hora', limiteHoje.toISOString())
-      .filter('Cliente_Info->>telefone', 'ilike', `%${qDigits}%`)
+      .gte('data_hora', limiteHoje.toISOString())
+      .filter('cliente_info->>telefone', 'ilike', `%${qDigits}%`)
       .limit(5);
     porTelefone = telData || [];
   }
@@ -1128,8 +1048,8 @@ async function getAcompanhamentoPedido(lojaId, query) {
   const vistos = new Set();
   let encontrados = [...(porId || []), ...porTelefone]
     .filter(p => {
-      if (vistos.has(p.ID_Venda)) return false;
-      vistos.add(p.ID_Venda);
+      if (vistos.has(p.id_venda)) return false;
+      vistos.add(p.id_venda);
       return true;
     });
 
@@ -1138,8 +1058,8 @@ async function getAcompanhamentoPedido(lojaId, query) {
 
   // Ordena pelo mais recente
   encontrados.sort((a, b) => {
-    const tA = a.Data_Hora ? new Date(a.Data_Hora).getTime() : 0;
-    const tB = b.Data_Hora ? new Date(b.Data_Hora).getTime() : 0;
+    const tA = a.data_hora ? new Date(a.data_hora).getTime() : 0;
+    const tB = b.data_hora ? new Date(b.data_hora).getTime() : 0;
     return tB - tA;
   });
 
@@ -1154,10 +1074,10 @@ async function getAcompanhamentoPedido(lojaId, query) {
   const resultados = encontrados.map(encontrado => {
     let itensResumo = '';
     try {
-      const arr = Array.isArray(encontrado.Itens_Comprados)
-        ? encontrado.Itens_Comprados
-        : (typeof encontrado.Itens_Comprados === 'string'
-            ? JSON.parse(encontrado.Itens_Comprados) : []);
+      const arr = Array.isArray(encontrado.itens_comprados)
+        ? encontrado.itens_comprados
+        : (typeof encontrado.itens_comprados === 'string'
+            ? JSON.parse(encontrado.itens_comprados) : []);
       itensResumo = arr.map(it =>
         it.descricao + (it.preco ? ' — R$' + parseFloat(it.preco).toFixed(2).replace('.', ',') : '')
       ).join('\n');
@@ -1166,34 +1086,34 @@ async function getAcompanhamentoPedido(lojaId, query) {
     let nomeCliente = '';
     let enderecoCli = '';
     try {
-      const cli = typeof encontrado.Cliente_Info === 'object'
-        ? (encontrado.Cliente_Info || {})
-        : JSON.parse(encontrado.Cliente_Info || '{}');
+      const cli = typeof encontrado.cliente_info === 'object'
+        ? (encontrado.cliente_info || {})
+        : JSON.parse(encontrado.cliente_info || '{}');
       nomeCliente = cli.nome    || '';
       enderecoCli = cli.endereco || '';
     } catch { /* ignora */ }
 
-    // Normaliza Data_Hora: ISO → string BR
-    let dataHoraV = encontrado.Data_Hora || '';
+    // Normaliza data_hora: ISO → string BR
+    let dataHoraV = encontrado.data_hora || '';
     if (dataHoraV && /^\d{4}-\d{2}-\d{2}T/.test(dataHoraV.toString())) {
       dataHoraV = new Date(dataHoraV)
         .toLocaleString('pt-BR', { timeZone: TZ, hour12: false })
         .replace(',', '');
     }
 
-    const statusVal = (encontrado.Status || '').toUpperCase();
+    const statusVal = (encontrado.status || '').toUpperCase();
 
     return {
-      ID_Venda:        encontrado.ID_Venda    || '',
-      Origem:          (encontrado.Origem     || '').toUpperCase(),
-      Status:          statusVal,
-      StatusLabel:     statusLabels[statusVal] || statusVal,
-      Data_Hora:       dataHoraV.toString(),
-      Total_Final:     parseFloat(encontrado.Total_Final || 0),
-      Entregador_Nome: (encontrado.Entregador_Nome || '').toString(),
-      nomeCliente,
+      id_venda:        encontrado.id_venda        || '',
+      origem:          (encontrado.origem         || '').toUpperCase(),
+      status:          statusVal,
+      status_label:    statusLabels[statusVal]    || statusVal,
+      data_hora:       dataHoraV.toString(),
+      total_final:     parseFloat(encontrado.total_final || 0),
+      entregador_nome: (encontrado.entregador_nome || '').toString(),
+      nome_cliente:    nomeCliente,
       endereco:        enderecoCli,
-      itensResumo,
+      itens_resumo:    itensResumo,
     };
   });
 
@@ -1232,27 +1152,27 @@ async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador
 }
 
 const _COLUNAS_PEDIDO_DEFAULT = {
-  ID_Venda: '', Origem: '', Data_Hora: '', Operador: '', Cliente_Info: null,
-  Itens_Comprados: [], Subtotal: 0, Desconto: 0, Taxa_Entrega: 0,
-  Total_Final: 0, Metodo_Pagamento: '', Status: '',
-  Peso_Bruto_g: 0, ID_Tara: null, Peso_Tara_g: 0, Peso_Liquido_g: 0,
-  Preco_KG: 0, Troco: 0, Entregador_Nome: '', Cancelado_Por: '',
+  id_venda: '', origem: '', data_hora: '', operador: '', cliente_info: null,
+  itens_comprados: [], subtotal: 0, desconto: 0, taxa_entrega: 0,
+  total_final: 0, metodo_pagamento: '', status: '',
+  peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
+  preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
 };
 
 async function registrarVendaPDV(lojaId, pedido) {
   const doc = Object.assign({}, _COLUNAS_PEDIDO_DEFAULT, pedido);
 
-  // Garante timestamp ISO para o campo Data_Hora
-  if (!doc.Data_Hora) doc.Data_Hora = new Date().toISOString();
+  // Garante timestamp ISO para o campo data_hora
+  if (!doc.data_hora) doc.data_hora = new Date().toISOString();
 
-  const res = await salvarRegistro(lojaId, 'pedidos', 'VND', doc, 'ID_Venda');
+  const res = await salvarRegistro(lojaId, 'pedidos', 'VND', doc, 'id_venda');
 
-  if (res.sucesso && (pedido.Origem === 'DELIVERY' || pedido.Origem === 'ONLINE')) {
+  if (res.sucesso && (pedido.origem === 'DELIVERY' || pedido.origem === 'ONLINE')) {
     let isRetirada = false;
     try {
-      const cli = typeof pedido.Cliente_Info === 'string'
-        ? JSON.parse(pedido.Cliente_Info)
-        : (pedido.Cliente_Info || {});
+      const cli = typeof pedido.cliente_info === 'string'
+        ? JSON.parse(pedido.cliente_info)
+        : (pedido.cliente_info || {});
       if (cli.endereco === 'Retirada na loja') isRetirada = true;
     } catch { /* ignora */ }
 
@@ -1291,24 +1211,24 @@ async function registrarVendaBalcao(lojaId, dados) {
     const jaExiste = cpfLimpo ? await buscarClientePorCPF(lojaId, cpfLimpo) : null;
     if (!jaExiste) {
       await salvarCliente(lojaId, {
-        Nome:     dados.nomeCliente.trim(),
-        CPF:      cpfLimpo || '',
-        Telefone: dados.telefone ? dados.telefone.replace(/\D/g, '') : '',
+        nome:     dados.nomeCliente.trim(),
+        cpf:      cpfLimpo || '',
+        telefone: dados.telefone ? dados.telefone.replace(/\D/g, '') : '',
       });
     }
   }
 
   const pedido = {
-    ID_Venda: '', Origem: 'BALCAO', Data_Hora: new Date().toISOString(),
-    Operador: dados.operador || 'CAIXA',
+    id_venda: '', origem: 'BALCAO', data_hora: new Date().toISOString(),
+    operador: dados.operador || 'CAIXA',
     // JSONB: passa objeto diretamente (sem JSON.stringify)
-    Cliente_Info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '' },
-    Itens_Comprados: todosItens,
-    Subtotal: subtotal, Desconto: desconto, Taxa_Entrega: 0, Total_Final: total,
-    Metodo_Pagamento: dados.pagamento || '', Status: 'ENTREGUE',
-    Peso_Bruto_g: pesoBruto, ID_Tara: dados.idTara || null, Peso_Tara_g: pesoTara,
-    Peso_Liquido_g: pesoLiq, Preco_KG: precoKG, Troco: troco,
-    Entregador_Nome: '', Cancelado_Por: '',
+    cliente_info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '' },
+    itens_comprados: todosItens,
+    subtotal, desconto, taxa_entrega: 0, total_final: total,
+    metodo_pagamento: dados.pagamento || '', status: 'ENTREGUE',
+    peso_bruto_g: pesoBruto, id_tara: dados.idTara || null, peso_tara_g: pesoTara,
+    peso_liquido_g: pesoLiq, preco_kg: precoKG, troco,
+    entregador_nome: '', cancelado_por: '',
   };
 
   const resultado = await registrarVendaPDV(lojaId, pedido);
@@ -1327,14 +1247,14 @@ async function registrarVendaDelivery(lojaId, dados) {
     ? Math.max(0, Math.round((valorPago - total) * 100) / 100) : 0;
 
   const pedido = {
-    ID_Venda: '', Origem: 'DELIVERY', Data_Hora: new Date().toISOString(),
-    Operador: dados.operador || 'CAIXA',
-    Cliente_Info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
-    Itens_Comprados: itens,
-    Subtotal: subtotal, Desconto: desconto, Taxa_Entrega: taxaEnt, Total_Final: total,
-    Metodo_Pagamento: dados.pagamento || '', Status: 'NOVO',
-    Peso_Bruto_g: 0, ID_Tara: null, Peso_Tara_g: 0, Peso_Liquido_g: 0,
-    Preco_KG: 0, Troco: troco, Entregador_Nome: '', Cancelado_Por: '',
+    id_venda: '', origem: 'DELIVERY', data_hora: new Date().toISOString(),
+    operador: dados.operador || 'CAIXA',
+    cliente_info:    { nome: dados.nomeCliente || '', cpf: dados.cpfCliente || '', telefone: dados.telefone || '', endereco: dados.endereco || '' },
+    itens_comprados: itens,
+    subtotal, desconto, taxa_entrega: taxaEnt, total_final: total,
+    metodo_pagamento: dados.pagamento || '', status: 'NOVO',
+    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
+    preco_kg: 0, troco, entregador_nome: '', cancelado_por: '',
   };
 
   const resultado = await registrarVendaPDV(lojaId, pedido);
@@ -1347,7 +1267,7 @@ async function finalizarPedidoOnline(lojaId, dadosPedido) {
   if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
 
   const config = await getConfiguracoes(lojaId);
-  if ((config['Status_Loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
+  if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento. Tente mais tarde.');
 
   const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
@@ -1360,13 +1280,13 @@ async function finalizarPedidoOnline(lojaId, dadosPedido) {
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
 
   const pedido = {
-    ID_Venda: '', Origem: 'ONLINE', Data_Hora: new Date().toISOString(), Operador: 'APP',
-    Cliente_Info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    Itens_Comprados: dadosPedido.itens,
-    Subtotal: subtotalReal, Desconto: desconto, Taxa_Entrega: taxaEnt, Total_Final: total,
-    Metodo_Pagamento: dadosPedido.pagamento || '', Status: 'NOVO',
-    Peso_Bruto_g: 0, ID_Tara: null, Peso_Tara_g: 0, Peso_Liquido_g: 0,
-    Preco_KG: 0, Troco: 0, Entregador_Nome: '', Cancelado_Por: '',
+    id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
+    cliente_info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados: dadosPedido.itens,
+    subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
+    metodo_pagamento: dadosPedido.pagamento || '', status: 'NOVO',
+    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
+    preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
   };
 
   return registrarVendaPDV(lojaId, pedido);
@@ -1380,8 +1300,8 @@ async function atualizarStatusPedido(lojaId, idVenda, novoStatus) {
   // Verifica existência (e garante loja_id correto)
   const { data: existente, error: errBusca } = await supabase
     .from('pedidos')
-    .select('ID_Venda')
-    .eq('ID_Venda', idVenda.toString())
+    .select('id_venda')
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId)
     .maybeSingle();
 
@@ -1390,8 +1310,8 @@ async function atualizarStatusPedido(lojaId, idVenda, novoStatus) {
 
   const { error } = await supabase
     .from('pedidos')
-    .update({ Status: novoStatus })
-    .eq('ID_Venda', idVenda.toString())
+    .update({ status: novoStatus })
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId);
 
   if (error) throw new Error(`[atualizarStatusPedido] ${error.message}`);
@@ -1416,16 +1336,16 @@ async function cancelarPedidoAutorizado(lojaId, idVenda, loginAuth, senhaAuth) {
 
   const { data: pedido, error: errBusca } = await supabase
     .from('pedidos')
-    .select('Status, Origem')
-    .eq('ID_Venda', idVenda.toString())
+    .select('status, origem')
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId)
     .maybeSingle();
 
   if (errBusca) throw new Error(`[cancelarPedido:check] ${errBusca.message}`);
   if (!pedido) throw new Error(`Pedido "${idVenda}" não encontrado.`);
 
-  const statusAtual = (pedido.Status || '').toUpperCase();
-  const origemAtual = (pedido.Origem || '').toUpperCase();
+  const statusAtual = (pedido.status || '').toUpperCase();
+  const origemAtual = (pedido.origem || '').toUpperCase();
 
   if (statusAtual === 'CANCELADO') throw new Error('Pedido já cancelado.');
   if (statusAtual === 'ENTREGUE' && origemAtual !== 'BALCAO') throw new Error('Pedido já entregue.');
@@ -1433,10 +1353,10 @@ async function cancelarPedidoAutorizado(lojaId, idVenda, loginAuth, senhaAuth) {
   const { error } = await supabase
     .from('pedidos')
     .update({
-      Status:        'CANCELADO',
-      Cancelado_Por: `${auth.nome} (${auth.cargo}) — ${_agora()}`,
+      status:        'CANCELADO',
+      cancelado_por: `${auth.nome} (${auth.cargo}) — ${_agora()}`,
     })
-    .eq('ID_Venda', idVenda.toString())
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId);
 
   if (error) throw new Error(`[cancelarPedido:update] ${error.message}`);
@@ -1455,16 +1375,16 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
 
   const { data: pedido, error: errBusca } = await supabase
     .from('pedidos')
-    .select('Status, Entregador_Nome')
-    .eq('ID_Venda', idVenda.toString())
+    .select('status, entregador_nome')
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId)
     .maybeSingle();
 
   if (errBusca) throw new Error(`[pegarDelivery:check] ${errBusca.message}`);
   if (!pedido) throw new Error('Pedido não encontrado.');
 
-  const status      = (pedido.Status          || '').toUpperCase();
-  const entregAtual = (pedido.Entregador_Nome || '').toString().trim();
+  const status      = (pedido.status          || '').toUpperCase();
+  const entregAtual = (pedido.entregador_nome || '').toString().trim();
 
   if (status === 'ENTREGUE')  throw new Error('Pedido já entregue.');
   if (status === 'CANCELADO') throw new Error('Pedido cancelado.');
@@ -1474,8 +1394,8 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
 
   const { error } = await supabase
     .from('pedidos')
-    .update({ Entregador_Nome: nomeTrimmed, Status: 'EM_MONTAGEM' })
-    .eq('ID_Venda', idVenda.toString())
+    .update({ entregador_nome: nomeTrimmed, status: 'EM_MONTAGEM' })
+    .eq('id_venda', idVenda.toString())
     .eq('loja_id', lojaId);
 
   if (error) throw new Error(`[pegarDelivery:update] ${error.message}`);
@@ -1487,27 +1407,27 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
 // CADASTROS (CRUD genérico por loja)
 // ══════════════════════════════════════════════════════════
 
-const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          'USR', d, 'ID_Usuario');
+const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          'USR', d, 'id_usuario');
 const excluirUsuario        = (lojaId, id) => deletarRegistro(lojaId, 'usuarios', id);
-const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai-categorias',   'CAT', d, 'ID_Categoria');
+const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai-categorias',   'CAT', d, 'id_categoria');
 const excluirAcaiCategoria  = (lojaId, id) => deletarRegistro(lojaId, 'acai-categorias', id);
-const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai-ingredientes', 'ING', d, 'ID_Ingrediente');
+const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai-ingredientes', 'ING', d, 'id_ingrediente');
 const excluirAcaiIngrediente= (lojaId, id) => deletarRegistro(lojaId, 'acai-ingredientes', id);
-const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai-modelos',      'MOD', d, 'ID_Modelo');
+const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai-modelos',      'MOD', d, 'id_modelo');
 const excluirAcaiModelo     = (lojaId, id) => deletarRegistro(lojaId, 'acai-modelos', id);
-const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          'IT',  d, 'ID_Item');
+const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          'IT',  d, 'id_item');
 const excluirItemFixo       = (lojaId, id) => deletarRegistro(lojaId, 'cardapio', id);
-const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           'BRR', d, 'ID_Bairro');
+const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           'BRR', d, 'id_bairro');
 const excluirBairro         = (lojaId, id) => deletarRegistro(lojaId, 'bairros', id);
-const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            'CUP', d, 'Codigo_Cupom');
+const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            'CUP', d, 'codigo_cupom');
 const excluirCupom          = (lojaId, id) => deletarRegistro(lojaId, 'cupons', id);
-const salvarTara            = (lojaId, d) => salvarRegistro(lojaId, 'taras',             'TRA', d, 'ID_Tara');
+const salvarTara            = (lojaId, d) => salvarRegistro(lojaId, 'taras',             'TRA', d, 'id_tara');
 const excluirTara           = (lojaId, id) => deletarRegistro(lojaId, 'taras', id);
 
 async function salvarCliente(lojaId, dados) {
-  // Data_Cadastro em ISO para armazenar como TIMESTAMPTZ
-  if (!dados.Data_Cadastro) dados.Data_Cadastro = new Date().toISOString();
-  return salvarRegistro(lojaId, 'clientes', 'CLI', dados, 'ID_Cliente');
+  // data_cadastro em ISO para armazenar como TIMESTAMPTZ
+  if (!dados.data_cadastro) dados.data_cadastro = new Date().toISOString();
+  return salvarRegistro(lojaId, 'clientes', 'CLI', dados, 'id_cliente');
 }
 
 async function buscarClientePorCPF(lojaId, cpf) {
@@ -1518,7 +1438,7 @@ async function buscarClientePorCPF(lojaId, cpf) {
     .from('clientes')
     .select('*')
     .eq('loja_id', lojaId)
-    .eq('CPF', cpfLimpo)
+    .eq('cpf', cpfLimpo)
     .limit(1);
 
   if (error) throw new Error(`[buscarClientePorCPF] ${error.message}`);
@@ -1532,7 +1452,7 @@ async function buscarClientePorTelefone(lojaId, telefone) {
     .from('clientes')
     .select('*')
     .eq('loja_id', lojaId)
-    .eq('Telefone', telLimpo)
+    .eq('telefone', telLimpo)
     .limit(1);
 
   if (error) throw new Error(`[buscarClientePorTelefone] ${error.message}`);
@@ -1540,10 +1460,10 @@ async function buscarClientePorTelefone(lojaId, telefone) {
 }
 
 async function salvarConfiguracoesLote(lojaId, configObj) {
-  // Normaliza PIX_Modo: 'AUTO'/'AUTOMATICO'/'auto' → sempre 'AUTO' ou 'MANUAL'
-  if (configObj['PIX_Modo'] !== undefined) {
-    const m = (configObj['PIX_Modo'] || 'MANUAL').toString().toUpperCase().trim();
-    configObj['PIX_Modo'] = (m === 'AUTO' || m === 'AUTOMATICO' || m === 'AUTOMÁTICO')
+  // Normaliza pix_modo: 'AUTO'/'AUTOMATICO'/'auto' → sempre 'AUTO' ou 'MANUAL'
+  if (configObj['pix_modo'] !== undefined) {
+    const m = (configObj['pix_modo'] || 'MANUAL').toString().toUpperCase().trim();
+    configObj['pix_modo'] = (m === 'AUTO' || m === 'AUTOMATICO' || m === 'AUTOMÁTICO')
       ? 'AUTO' : 'MANUAL';
   }
 
@@ -1576,7 +1496,7 @@ async function validarCupom(lojaId, codigo) {
     .from('cupons')
     .select('*')
     .eq('loja_id', lojaId)
-    .eq('Codigo_Cupom', codigoUpper)
+    .eq('codigo_cupom', codigoUpper)
     .limit(1);
 
   if (error) throw new Error(`[validarCupom] ${error.message}`);
@@ -1584,31 +1504,31 @@ async function validarCupom(lojaId, codigo) {
 
   const d = data[0];
 
-  // Ativo: BOOLEAN no Postgres → compatibiliza com lógica legada
-  const ativoRaw = d.Ativo;
+  // ativo: BOOLEAN no Postgres → compatibiliza com lógica legada
+  const ativoRaw = d.ativo;
   const ativo    = typeof ativoRaw === 'boolean'
     ? ativoRaw
     : (ativoRaw || '').toString().toUpperCase() === 'SIM';
 
   if (!ativo) return { valido: false, mensagem: 'Cupom inativo ou esgotado.' };
 
-  // Validade: TIMESTAMPTZ (string ISO) do Postgres
-  if (d.Validade) {
-    const validade = new Date(d.Validade); // ISO → Date funciona diretamente
+  // validade: TIMESTAMPTZ (string ISO) do Postgres
+  if (d.validade) {
+    const validade = new Date(d.validade); // ISO → Date funciona diretamente
     if (!isNaN(validade.getTime())) {
       validade.setHours(23, 59, 59, 999);
       if (validade < new Date()) return { valido: false, mensagem: 'Cupom expirado.' };
     }
   }
 
-  // Usar_Cardapio: BOOLEAN no Postgres
-  const usarCardapioRaw = d.Usar_Cardapio;
+  // usar_cardapio: BOOLEAN no Postgres
+  const usarCardapioRaw = d.usar_cardapio;
   const usarCardapio    = typeof usarCardapioRaw === 'boolean'
     ? usarCardapioRaw
     : (usarCardapioRaw || '').toString().toUpperCase() === 'SIM';
 
-  const tipo       = (d.Tipo_Desconto  || 'VALOR').toUpperCase();
-  const valorBruto = parseFloat(d.Valor_Desconto) || 0;
+  const tipo       = (d.tipo_desconto  || 'VALOR').toUpperCase();
+  const valorBruto = parseFloat(d.valor_desconto) || 0;
 
   const msgDesc = tipo === 'PERCENTUAL'
     ? `Desconto de ${valorBruto.toFixed(0)}% aplicado 🎉`
@@ -1616,7 +1536,7 @@ async function validarCupom(lojaId, codigo) {
 
   return {
     valido:       true,
-    codigo:       (d.Codigo_Cupom || '').toString(),
+    codigo:       (d.codigo_cupom || '').toString(),
     tipo,
     valor:        valorBruto,
     desconto:     tipo === 'VALOR' ? valorBruto : 0,
@@ -1633,7 +1553,7 @@ async function validarCupom(lojaId, codigo) {
 
 async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['MP_AccessToken'] || '').toString().trim();
+  const token  = (config['mp_access_token'] || '').toString().trim();
   if (!token) return { sucesso: false, mensagem: 'Token do Mercado Pago não configurado.' };
 
   const idempKey = 'PIX-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -1670,7 +1590,7 @@ async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
 
 async function verificarPagamentoMP(lojaId, idPagamento) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['MP_AccessToken'] || '').toString().trim();
+  const token  = (config['mp_access_token'] || '').toString().trim();
   if (!token || !idPagamento) return { status: 'erro', detalhe: 'Dados inválidos.' };
 
   const resp = await fetch(`https://api.mercadopago.com/v1/payments/${idPagamento}`, {
@@ -1683,7 +1603,7 @@ async function verificarPagamentoMP(lojaId, idPagamento) {
 
 async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
   const config = await getConfiguracoes(lojaId);
-  const modoMP = (config['PIX_Modo'] || 'MANUAL').toUpperCase();
+  const modoMP = (config['pix_modo'] || 'MANUAL').toUpperCase();
 
   // Aceita AUTO, AUTOMATICO ou AUTOMÁTICO
   if (modoMP !== 'AUTO' && modoMP !== 'AUTOMATICO' && modoMP !== 'AUTOMÁTICO') {
@@ -1691,7 +1611,7 @@ async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
   }
 
   if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
-  if ((config['Status_Loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
+  if ((config['status_loja'] || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento.');
 
   const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
@@ -1717,13 +1637,13 @@ async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
 
   // 3. PIX gerado com sucesso → cria o pedido no banco
   const pedido = {
-    ID_Venda: '', Origem: 'ONLINE', Data_Hora: new Date().toISOString(), Operador: 'APP',
-    Cliente_Info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
-    Itens_Comprados: dadosPedido.itens,
-    Subtotal: subtotalReal, Desconto: desconto, Taxa_Entrega: taxaEnt, Total_Final: total,
-    Metodo_Pagamento: 'PIX', Status: 'AGUARDANDO_PIX',
-    Peso_Bruto_g: 0, ID_Tara: null, Peso_Tara_g: 0, Peso_Liquido_g: 0,
-    Preco_KG: 0, Troco: 0, Entregador_Nome: '', Cancelado_Por: '',
+    id_venda: '', origem: 'ONLINE', data_hora: new Date().toISOString(), operador: 'APP',
+    cliente_info:    { nome: dadosPedido.nomeCliente || '', cpf: '', telefone: dadosPedido.telefone || '', endereco: dadosPedido.endereco || '' },
+    itens_comprados: dadosPedido.itens,
+    subtotal: subtotalReal, desconto, taxa_entrega: taxaEnt, total_final: total,
+    metodo_pagamento: 'PIX', status: 'AGUARDANDO_PIX',
+    peso_bruto_g: 0, id_tara: null, peso_tara_g: 0, peso_liquido_g: 0,
+    preco_kg: 0, troco: 0, entregador_nome: '', cancelado_por: '',
   };
 
   const res = await registrarVendaPDV(lojaId, pedido);
@@ -1755,9 +1675,9 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
 
 async function getConfigPix(lojaId) {
   const config = await getConfiguracoes(lojaId);
-  const token  = (config['MP_AccessToken'] || '').toString().trim();
+  const token  = (config['mp_access_token'] || '').toString().trim();
   return {
-    modoMP:        (config['PIX_Modo'] || 'MANUAL').toUpperCase(),
+    modoMP:        (config['pix_modo'] || 'MANUAL').toUpperCase(),
     mpConfigurado: token.length > 10,
   };
 }
@@ -2116,10 +2036,7 @@ app.listen(PORT, () => {
   ║  SUPABASE — CONFIGURAÇÃO:                                            ║
   ║  [1] Em Settings → API → "Extra Search Path":                       ║
   ║      Adicione o schema: acaiteria                                    ║
-  ║  [2] Rodar no SQL Editor (correção do campo Status_Loja):           ║
-  ║      ALTER TABLE acaiteria.configuracoes DROP COLUMN "Status_Loja"; ║
-  ║      ALTER TABLE acaiteria.configuracoes                             ║
-  ║        ADD COLUMN "Status_Loja" TEXT NOT NULL DEFAULT 'AUTOMATICO'; ║
+  ║  [2] Confirmar que todas as tabelas usam nomes de coluna lowercase.  ║
   ║  [3] Criar o primeiro registro em acaiteria.lojas:                  ║
   ║      INSERT INTO acaiteria.lojas (nome_loja, status, plano)         ║
   ║      VALUES ('Nome da Loja', 'ativo', 'pro') RETURNING id;          ║
