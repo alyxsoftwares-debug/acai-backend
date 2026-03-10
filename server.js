@@ -1110,7 +1110,10 @@ async function pegarPedidoDelivery(lojaId, idVenda, nomeEntregador) {
 // CADASTROS — CRUD POR TABELA
 // ══════════════════════════════════════════════════════════
 
-const salvarUsuario         = (lojaId, d) => salvarRegistro(lojaId, 'usuarios',          d, 'id_usuario');
+async function salvarUsuario(lojaId, d) {
+  if (d.status) d.status = d.status.toString().toLowerCase();
+  return salvarRegistro(lojaId, 'usuarios', d, 'id_usuario');
+}
 const excluirUsuario        = (lojaId, id) => deletarRegistro(lojaId, 'usuarios',          'id_usuario',     id);
 const salvarAcaiCategoria   = (lojaId, d) => salvarRegistro(lojaId, 'acai_categorias',   d, 'id_categoria');
 const excluirAcaiCategoria  = (lojaId, id) => deletarRegistro(lojaId, 'acai_categorias',  'id_categoria',   id);
