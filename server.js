@@ -581,15 +581,16 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
   const dtFim = _parseDataDDMMYYYY(dataFim);
   if (!dtIni || !dtFim) return { pedidos: [], resumo: _resumoVazio() };
 
-  dtIni.setHours(0,  0,  0,   0);
-  dtFim.setHours(23, 59, 59, 999);
+  // Força o fuso horário de Fortaleza (-03:00) para garantir o "hoje" correto
+  const isoIni = `${dtIni.getFullYear()}-${String(dtIni.getMonth() + 1).padStart(2, '0')}-${String(dtIni.getDate()).padStart(2, '0')}T00:00:00.000-03:00`;
+  const isoFim = `${dtFim.getFullYear()}-${String(dtFim.getMonth() + 1).padStart(2, '0')}-${String(dtFim.getDate()).padStart(2, '0')}T23:59:59.999-03:00`;
 
   const { data: pedidos, error } = await supabase
     .from('pedidos')
     .select('*')
     .eq('loja_id', lojaId)
-    .gte('data_hora', dtIni.toISOString())
-    .lte('data_hora', dtFim.toISOString())
+    .gte('data_hora', isoIni)
+    .lte('data_hora', isoFim)
     .order('data_hora', { ascending: false });
 
   if (error) throw new Error(error.message);
