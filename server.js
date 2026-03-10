@@ -328,9 +328,26 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
   const d = usrs[0];
 
   const bcrypt = require('bcrypt');
-// ...
-const senhaValida = await bcrypt.compare(senhaDigitada.toString(), d.senha || '');
-if (!senhaValida) {
+  const senhaNobanco = (d.senha || '').toString();
+  const eBcrypt = senhaNobanco.startsWith('$2b$') || senhaNobanco.startsWith('$2a$');
+
+  let senhaValida;
+  if (eBcrypt) {
+    senhaValida = await bcrypt.compare(senhaDigitada.toString(), senhaNobanco);
+  } else {
+    // Senha em texto plano — compara e migra para bcrypt automaticamente
+    senhaValida = senhaDigitada.toString() === senhaNoBanco;
+    if (senhaValida) {
+      const novoHash = await bcrypt.hash(senhaDigitada.toString(), 10);
+      await supabase
+        .from('usuarios')
+        .update({ senha: novoHash })
+        .eq('loja_id', lojaId)
+        .eq('id_usuario', d.id_usuario);
+    }
+  }
+
+  if (!senhaValida) {
     return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
   }
   if ((d.status || '').toString().toLowerCase() !== 'ativo') {
