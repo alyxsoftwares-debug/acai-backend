@@ -375,6 +375,28 @@ const handler = fn => async (req, res) => {
   }
 };
 
+// ─── INTERCEPTADOR INTELIGENTE DE SLUG ───
+// Converte o nome da loja (ex: "alyxsoftwares") no UUID real do Supabase antes de bater no banco.
+app.param('loja_id', async (req, res, next, idOrSlug) => {
+  // Verifica se já é um UUID válido
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idOrSlug);
+  
+  if (!isUUID) {
+    try {
+      const realId = await resolverSlugParaId(idOrSlug);
+      if (!realId) {
+        return res.status(404).json({ sucesso: false, mensagem: 'Loja não encontrada pelo nome.' });
+      }
+      req.params.loja_id = realId; // Substitui silenciosamente
+    } catch (err) {
+      console.error('[Slug Resolver]', err);
+      return res.status(500).json({ sucesso: false, mensagem: 'Erro ao resolver nome da loja.' });
+    }
+  }
+  next();
+});
+
+
 
 // ══════════════════════════════════════════════════════════
 // AUTENTICAÇÃO — LOGIN
