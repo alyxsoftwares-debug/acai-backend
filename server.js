@@ -403,13 +403,22 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
  * Lê todos os registros de uma tabela filtrando por loja_id.
  */
 async function lerTabela(lojaId, tabela) {
-  const { data, error } = await supabase
-    .from(tabela)
-    .select('*')
-    .eq('loja_id', lojaId)
-    .order('ordem', { ascending: true, nullsFirst: false });
-
-  if (error) throw new Error(error.message);
+  let query = supabase.from(tabela).select('*').eq('loja_id', lojaId);
+  
+  // Aplica ordenação apenas nas tabelas que realmente possuem a coluna "ordem"
+  const tabelasComOrdem = ['cardapio', 'acai_categorias', 'acai_ingredientes', 'acai_modelos', 'bairros'];
+  
+  if (tabelasComOrdem.includes(tabela)) {
+    query = query.order('ordem', { ascending: true, nullsFirst: false });
+  } else if (tabela === 'usuarios') {
+    query = query.order('nome', { ascending: true }); // Organiza os usuários por ordem alfabética
+  }
+  
+  const { data, error } = await query;
+  if (error) {
+    console.error(`[Erro na tabela ${tabela}]:`, error.message);
+    throw new Error(error.message);
+  }
   return data || [];
 }
 
