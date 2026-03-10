@@ -412,14 +412,14 @@ function _normalizarRow(nomeColecao, row) {
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
-  // 🧹 FAXINEIRO UNIVERSAL (Resolve erros de campos vazios para sempre)
+  // 🧹 FAXINEIRO UNIVERSAL (Limpa campos vazios)
   for (const key of Object.keys(result)) {
     if (typeof result[key] === 'string' && result[key].trim() === '') {
       result[key] = null;
     }
   }
 
-  // 1. Normalização de Status e Origem (Evita erro de check constraint)
+  // 1. Normalização de Status e Origem
   if (result['Status']) result['Status'] = result['Status'].toString().toUpperCase();
   if (result['Origem']) result['Origem'] = result['Origem'].toString().toUpperCase();
 
@@ -450,7 +450,17 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 5. Renomear campos do frontend para nomes de coluna reais
+  // 5. TRADUTOR DE DATA (Converte 30/04/2026 para 2026-04-30 automaticamente)
+  for (const field of ['Validade', 'Data_Hora', 'Data_Cadastro']) {
+    if (result[field] && typeof result[field] === 'string' && result[field].includes('/')) {
+      const partes = result[field].split('/');
+      if (partes.length === 3) {
+        result[field] = `${partes[2]}-${partes[1]}-${partes[0]}`;
+      }
+    }
+  }
+
+  // 6. Renomear campos para o Banco
   const map = _FIELD_MAP[nomeColecao];
   if (map?.toDB) {
     for (const [appField, dbCol] of Object.entries(map.toDB)) {
