@@ -399,8 +399,15 @@ function _prepararParaDB(nomeColecao, dados) {
   if (result['status']) result['status'] = result['status'].toString().toUpperCase();
   if (result['origem']) result['origem'] = result['origem'].toString().toUpperCase();
 
-  // 2. Booleanos nativos: A camada de tradução ineficiente foi removida para garantir pureza de dados.
-  // Assume-se que a payload do front-end já envia booleanos estruturados.
+  // 2. 'SIM'/'NAO'/'NÃO' → boolean nativo (o frontend envia strings, o Postgres exige boolean)
+  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
+  for (const field of boolFields) {
+    if (field in result && typeof result[field] !== 'boolean') {
+      const s = (result[field] || '').toString().toUpperCase().trim()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); // remove acentos (NÃO → NAO)
+      result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
+    }
+  }
 
   // 3. JSONB: parse strings JSON
   for (const field of ['cliente_info', 'itens_comprados']) {
@@ -411,6 +418,14 @@ function _prepararParaDB(nomeColecao, dados) {
         try { result[field] = JSON.parse(result[field]); } catch { }
       }
     }
+  }
+
+  // 3b. Campos que existem só no frontend e NÃO têm coluna no banco → remover antes do insert
+  const _CAMPOS_VIRTUAIS = {
+    'acai-modelos': ['limites_json'],
+  };
+  for (const campo of (_CAMPOS_VIRTUAIS[nomeColecao] || [])) {
+    delete result[campo];
   }
 
   // 4. UUID FK vazio → null
