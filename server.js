@@ -355,9 +355,7 @@ function _normalizarRow(nomeColecao, row) {
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
-  // 🧹 O GRANDE FAXINEIRO DE DADOS 🧹
-  // Varre todos os campos: se for um texto vazio (""), transforma em nulo (null).
-  // Isso resolve de uma vez por todas os erros de "vazio" para a loja atual e TODAS as futuras!
+  // 🧹 FAXINEIRO UNIVERSAL (Resolve erros de campos vazios para todas as lojas)
   for (const key of Object.keys(result)) {
     if (typeof result[key] === 'string' && result[key].trim() === '') {
       result[key] = null;
@@ -373,31 +371,31 @@ function _prepararParaDB(nomeColecao, dados) {
     }
   }
 
-  // 2. usuarios.Status: aceita 'Ativo'/'ativo'/'inativo' → lowercase para CHECK
+  // 2. usuarios.Status: normaliza para lowercase
   if (nomeColecao === 'usuarios' && result['Status'] !== undefined) {
     const s = (result['Status'] || '').toString().toLowerCase();
     result['Status'] = s === 'ativo' ? 'ativo' : 'inativo';
   }
 
-  // 3. JSONB: parse strings JSON (Postgres JSONB aceita objetos JS)
+  // 3. JSONB: parse strings JSON
   for (const field of ['Cliente_Info', 'Itens_Comprados']) {
     if (field in result && typeof result[field] === 'string') {
       if (!result[field]) {
         result[field] = field === 'Itens_Comprados' ? [] : null;
       } else {
-        try { result[field] = JSON.parse(result[field]); } catch { /* mantém string */ }
+        try { result[field] = JSON.parse(result[field]); } catch { }
       }
     }
   }
 
-  // 4. UUID FK vazio → null (evita erro de cast no Postgres)
+  // 4. UUID FK vazio → null
   for (const field of ['ID_Tara']) {
     if (field in result && (result[field] === '' || result[field] === undefined)) {
       result[field] = null;
     }
   }
 
-  // 5. Timestamps vazios → remover (usa DEFAULT do Postgres)
+  // 5. Timestamps vazios → remover
   for (const field of ['Data_Hora', 'Data_Cadastro', 'Validade', 'criado_em', 'atualizado_em']) {
     if (field in result && !result[field]) delete result[field];
   }
