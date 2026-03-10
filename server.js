@@ -385,14 +385,25 @@ async function getConfiguracoes(lojaId) {
 }
 
 async function salvarConfiguracoesLote(lojaId, configObj) {
-  // Garante que loja_id está presente e remove campos inválidos
-  const payload = { ...configObj, loja_id: lojaId };
+  const payload = { 
+    ...configObj, 
+    loja_id: lojaId,
+    preco_kg: parseFloat(configObj.preco_kg) || 0,
+    frete_gratis: parseFloat(configObj.frete_gratis) || 0
+  };
 
-  const { error } = await supabase
-    .from('configuracoes')
-    .upsert(payload, { onConflict: 'loja_id' });
+  const { data: existe } = await supabase.from('configuracoes').select('loja_id').eq('loja_id', lojaId).maybeSingle();
 
-  if (error) throw new Error(error.message);
+  let erroBanco;
+  if (existe) {
+    const { error } = await supabase.from('configuracoes').update(payload).eq('loja_id', lojaId);
+    erroBanco = error;
+  } else {
+    const { error } = await supabase.from('configuracoes').insert(payload);
+    erroBanco = error;
+  }
+
+  if (erroBanco) throw new Error(erroBanco.message);
   invalidarCacheCardapio(lojaId);
   return { sucesso: true, mensagem: 'Configurações salvas.' };
 }
