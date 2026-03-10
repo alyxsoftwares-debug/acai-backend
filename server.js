@@ -412,66 +412,50 @@ function _normalizarRow(nomeColecao, row) {
 function _prepararParaDB(nomeColecao, dados) {
   const result = { ...dados };
 
+  // 🧹 FAXINEIRO UNIVERSAL (Limpa campos vazios e evita erros em todas as lojas)
+  for (const key of Object.keys(result)) {
+    if (typeof result[key] === 'string' && result[key].trim() === '') {
+      result[key] = null;
+    }
+  }
+
   // 1. 'SIM'/'NAO' → boolean
-  // Aplica nos nomes de campo do APP (antes de renomear para o DB)
-  const boolFieldsApp = (_BOOL_SIM_NAO[nomeColecao] || []).map(f => {
-    // Se o campo já foi renomeado pelo _FIELD_MAP.toApp, usa o nome do app
-    const map = _FIELD_MAP[nomeColecao];
-    const reversed = map?.toApp ? Object.entries(map.toApp).find(([, appF]) => appF === f) : null;
-    return reversed ? reversed[1] : f; // mantém o nome do app
-  });
-  const boolFieldsDB = _BOOL_SIM_NAO[nomeColecao] || [];
-  const allBoolFields = [...new Set([...boolFieldsApp, ...boolFieldsDB])];
-  for (const field of allBoolFields) {
+  const boolFields = _BOOL_SIM_NAO[nomeColecao] || [];
+  for (const field of boolFields) {
     if (field in result && typeof result[field] !== 'boolean') {
       const s = (result[field] || '').toString().toUpperCase().trim();
       result[field] = (s === 'SIM' || s === 'S' || s === 'TRUE' || s === '1');
     }
   }
 
-  // 2. usuarios.Status: aceita 'Ativo'/'ativo'/'inativo' → lowercase para CHECK
-  if (nomeColecao === 'usuarios' && result['Status'] !== undefined) {
-    const s = (result['Status'] || '').toString().toLowerCase();
-    result['Status'] = s === 'ativo' ? 'ativo' : 'inativo';
-  }
+  // 2. Normalização de campos de Status e Origem (evita erros de Check Constraint)
+  if (result['Status']) result['Status'] = result['Status'].toString().toUpperCase();
+  if (result['Origem']) result['Origem'] = result['Origem'].toString().toUpperCase();
 
-  // 3. JSONB: parse strings JSON (Postgres JSONB aceita objetos JS)
+  // 3. JSONB: parse strings JSON
   for (const field of ['Cliente_Info', 'Itens_Comprados']) {
     if (field in result && typeof result[field] === 'string') {
       if (!result[field]) {
         result[field] = field === 'Itens_Comprados' ? [] : null;
       } else {
-        try { result[field] = JSON.parse(result[field]); } catch { /* mantém string */ }
+        try { result[field] = JSON.parse(result[field]); } catch { }
       }
     }
   }
 
-  // 4. UUID FK vazio → null (evita erro de cast no Postgres)
+  // 4. UUID FK vazio → null
   for (const field of ['ID_Tara', 'categoria_id', 'ID_Categoria']) {
     if (field in result && (result[field] === '' || result[field] === undefined)) {
       result[field] = null;
     }
   }
 
-  // 5. Timestamps vazios → remover (usa DEFAULT do Postgres)
-  for (const field of ['Data_Hora', 'Data_Cadastro', 'criado_em', 'atualizado_em']) {
+  // 5. Timestamps vazios → remover
+  for (const field of ['Data_Hora', 'Data_Cadastro', 'Validade', 'criado_em', 'atualizado_em']) {
     if (field in result && !result[field]) delete result[field];
   }
 
-  // 6. Validade de cupom: 'dd/MM/yyyy' ou 'dd/MM/yyyy HH:mm:ss' → ISO para TIMESTAMPTZ
-  if (nomeColecao === 'cupons' && result['Validade']) {
-    const strVal = result['Validade'].toString().trim().split(' ')[0]; // pega só a data
-    const d = _parseDataDDMMYYYY(strVal);
-    if (d && !isNaN(d.getTime())) {
-      result['Validade'] = d.toISOString();
-    } else {
-      delete result['Validade']; // não envia se inválido
-    }
-  } else if ('Validade' in result && !result['Validade']) {
-    delete result['Validade'];
-  }
-
-  // 7. Renomear campos do frontend → nomes de coluna reais do Postgres
+  // 6. Renomear campos do frontend para o DB
   const map = _FIELD_MAP[nomeColecao];
   if (map?.toDB) {
     for (const [appField, dbCol] of Object.entries(map.toDB)) {
@@ -479,15 +463,6 @@ function _prepararParaDB(nomeColecao, dados) {
         result[dbCol] = result[appField];
         delete result[appField];
       }
-    }
-  }
-
-  // 8. Remover campos desconhecidos pelo Postgres (evita erro de coluna não encontrada)
-  //    Só aplica nas coleções que têm whitelist definida em _FIELD_MAP
-  if (map?.dbCols) {
-    const permitidos = new Set([...map.dbCols, 'loja_id']);
-    for (const k of Object.keys(result)) {
-      if (!permitidos.has(k)) delete result[k];
     }
   }
 
