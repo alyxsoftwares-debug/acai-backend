@@ -26,6 +26,7 @@ const express        = require('express');
 const cors           = require('cors');
 const jwt            = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
+const rateLimit        = require('express-rate-limit');
 require('dotenv').config();
 
 // ─── VALIDAÇÃO DE AMBIENTE ────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 // ─── EXPRESS ─────────────────────────────────────────────────────────────────
 
 const app = express();
-app.set('trust proxy', 1); // <-- Adicione APENAS esta linha aqui
+app.set('trust proxy', 1);
 
 const ORIGENS_PERMITIDAS = [
   'https://alyxsoftwares.vercel.app',
@@ -69,7 +70,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-const rateLimit = require('express-rate-limit');
 
 const limiterLogin = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
@@ -80,8 +80,7 @@ const limiterLogin = rateLimit({
 app.use('/api/lojas/:loja_id/auth/login', limiterLogin);
 
 // ══════════════════════════════════════════════════════════
-// CACHE DE SLUG → UUID (Regra 3: Interceptador de Slug)
-// Evita consultas repetidas ao banco para tradução de slug
+// CACHE DE SLUG → UUID — evita consultas repetidas ao banco
 // ══════════════════════════════════════════════════════════
 
 const _slugCache = new Map(); // slug → { uuid, ts }
@@ -99,7 +98,7 @@ async function slugParaUUID(slug) {
     return cached.uuid;
   }
 
-  // Busca no schema public (tabela lojas está no schema padrão)
+  // Busca a loja pelo slug
   const { data, error } = await supabase
     .from('lojas')
     .select('id')
@@ -317,7 +316,7 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const { data: usrs, error: errUsr } = await supabase
     .from('usuarios')
-    .select('*')
+    .select('id_usuario, login, senha, nome, cargo, status, foto_perfil')
     .eq('loja_id', lojaId)
     .ilike('login', loginNorm)
     .limit(1);
@@ -554,7 +553,6 @@ async function getCardapioClienteCache(lojaId) {
     lerTabela(lojaId, 'bairros'),
   ]);
 
-  // Regra 5: booleanos nativos — disponivel === true (sem tradução SIM/NÃO)
   const pacote = {
     configuracoes: config,
     prontos:      prontos.filter(i => i.disponivel === true && i.mostrar_online !== false),
@@ -596,8 +594,19 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
     const pad = n => String(n).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${hora}`;
   }
-  const isoIni = _isoComFuso(dtIni, '00:00:00.000') + '-03:00';
-  const isoFim = _isoComFuso(dtFim, '23:59:59.999') + '-03:00';
+  function _getTZOffset() {
+    const now = new Date();
+    const utc = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const local = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
+    const diff = (utc - local) / 60000;
+    const sign = diff > 0 ? '-' : '+';
+    const h = String(Math.floor(Math.abs(diff) / 60)).padStart(2, '0');
+    const m = String(Math.abs(diff) % 60).padStart(2, '0');
+    return `${sign}${h}:${m}`;
+  }
+  const offset = _getTZOffset();
+  const isoIni = _isoComFuso(dtIni, '00:00:00.000') + offset;
+  const isoFim = _isoComFuso(dtFim, '23:59:59.999') + offset;
 
   const { data: pedidos, error } = await supabase
     .from('pedidos')
@@ -742,7 +751,6 @@ async function getAcompanhamentoPedido(lojaId, query) {
 
     let isMatchPhone = false;
     
-    // Tratamento blindado: Garante que cliente_info seja um objeto legível
     let cli = p.cliente_info || {};
     if (typeof cli === 'string') {
       try { cli = JSON.parse(cli); } catch(e) { cli = {}; }
@@ -776,7 +784,6 @@ async function getAcompanhamentoPedido(lojaId, query) {
   };
 
   return encontrados.map(p => {
-    // Tratamento blindado: Evita o erro fatal se itens_comprados vier como string
     let arr = p.itens_comprados || [];
     if (typeof arr === 'string') {
       try { arr = JSON.parse(arr); } catch(e) { arr = []; }
@@ -811,7 +818,7 @@ async function getDeliveryEmAndamento(lojaId) {
 
   const { data, error } = await supabase
     .from('pedidos')
-    .select('*')
+    .select('id_venda, loja_id, origem, data_hora, operador, status, total_final, desconto, taxa_entrega, metodo_pagamento, entregador_nome, cliente_info, cancelado_por')
     .eq('loja_id', lojaId)
     .in('origem', ['DELIVERY', 'ONLINE'])
     .neq('status', 'CANCELADO')
@@ -880,10 +887,8 @@ async function dispararPushOneSignal(lojaId, titulo, mensagem, ignorarEntregador
 
 /**
  * Registra um pedido na tabela pedidos.
- * Regra 6: cliente_info e itens_comprados devem ser objetos/arrays (jsonb).
  */
 async function registrarVendaPDV(lojaId, pedido) {
-  // Garante que jsonb são objetos, não strings
   const payload = {
     loja_id:          lojaId,
     origem:           pedido.origem           || '',
@@ -1006,21 +1011,23 @@ async function registrarVendaDelivery(lojaId, dados) {
   return resultado;
 }
 
-async function finalizarPedidoOnline(lojaId, dadosPedido) {
+async function _validarDadosPedidoOnline(lojaId, dadosPedido) {
   if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
-
   const config = await getConfiguracoes(lojaId);
   if ((config.status_loja || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento. Tente mais tarde.');
-
   const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
   const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
   if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
     throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
-
   const desconto = parseFloat(dadosPedido.desconto    || 0);
   const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
+  return { subtotalReal, desconto, taxaEnt, total };
+}
+
+async function finalizarPedidoOnline(lojaId, dadosPedido) {
+  const { subtotalReal, desconto, taxaEnt, total } = await _validarDadosPedidoOnline(lojaId, dadosPedido);
 
   const pedido = {
     origem: 'ONLINE', data_hora: _agora(), operador: 'APP',
@@ -1165,7 +1172,7 @@ async function buscarClientePorCPF(lojaId, cpf) {
 
   const { data, error } = await supabase
     .from('clientes')
-    .select('*')
+    .select('id_cliente, nome, cpf, telefone')
     .eq('loja_id', lojaId)
     .eq('cpf', cpfLimpo)
     .limit(1);
@@ -1179,7 +1186,7 @@ async function buscarClientePorTelefone(lojaId, telefone) {
 
   const { data, error } = await supabase
     .from('clientes')
-    .select('*')
+    .select('id_cliente, nome, cpf, telefone')
     .eq('loja_id', lojaId)
     .eq('telefone', telLimpo)
     .limit(1);
@@ -1200,7 +1207,7 @@ async function validarCupom(lojaId, codigo) {
 
   const { data, error } = await supabase
     .from('cupons')
-    .select('*')
+    .select('codigo_cupom, ativo, validade, tipo_desconto, usar_cardapio, valor_desconto')
     .eq('loja_id', lojaId)
     .eq('codigo_cupom', codigoUpper)
     .limit(1);
@@ -1210,7 +1217,6 @@ async function validarCupom(lojaId, codigo) {
 
   const d = data[0];
 
-  // Regra 5: booleano nativo — ativo é boolean true/false
   if (d.ativo !== true) return { valido: false, mensagem: 'Cupom inativo ou esgotado.' };
 
   if (d.validade) {
@@ -1222,7 +1228,6 @@ async function validarCupom(lojaId, codigo) {
   }
 
   const tipo         = (d.tipo_desconto || 'VALOR').toUpperCase();
-  // Regra 5: usar_cardapio é boolean nativo
   const usarCardapio = d.usar_cardapio !== false;
   const valorBruto   = parseFloat(d.valor_desconto) || 0;
 
@@ -1263,7 +1268,7 @@ async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
       transaction_amount: Math.round(parseFloat(total) * 100) / 100,
       description:        `Pedido ${idVenda}`,
       payment_method_id:  'pix',
-      payer: { email: emailPagador || 'contato@acaiteria.com.br' },
+      payer: { email: emailPagador || 'contato@loja.com.br' },
     }),
     signal: AbortSignal.timeout(15000),
   });
@@ -1297,30 +1302,18 @@ async function verificarPagamentoMP(lojaId, idPagamento) {
 }
 
 async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
-  const config  = await getConfiguracoes(lojaId);
   const modoMP  = (config.pix_modo || 'MANUAL').toUpperCase();
 
   if (modoMP !== 'AUTO') {
     return finalizarPedidoOnline(lojaId, dadosPedido);
   }
 
-  if (!dadosPedido?.itens?.length) throw new Error('Pedido vazio ou formato inválido.');
-  if ((config.status_loja || 'AUTOMATICO') === 'FORCAR_FECHADO')
-    throw new Error('A loja está fechada no momento.');
-
-  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
-  const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
-  if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
-    throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
-
-  const desconto    = parseFloat(dadosPedido.desconto    || 0);
-  const taxaEnt     = parseFloat(dadosPedido.taxaEntrega || 0);
-  const total       = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
+  const { subtotalReal, desconto, taxaEnt, total } = await _validarDadosPedidoOnline(lojaId, dadosPedido);
   const idVendaTemp = 'WEB-' + Date.now().toString().substring(5);
 
   const pix = await gerarPixMP(
     lojaId, total, idVendaTemp,
-    dadosPedido.telefone ? `${dadosPedido.telefone.replace(/\D/g, '')}@mp.br` : 'contato@acaiteria.com.br'
+    dadosPedido.telefone ? `${dadosPedido.telefone.replace(/\D/g, '')}@mp.br` : 'contato@loja.com.br'
   );
 
   if (!pix.sucesso) {
@@ -1411,7 +1404,7 @@ app.post('/api/webhooks/asaas', async (req, res) => {
       return res.json({ sucesso: true, mensagem: `Evento "${event}" ignorado.` });
     }
 
-    // Busca loja pelo asaas_customer_id (tabela lojas está no schema public)
+   // Busca loja pelo asaas_customer_id
     const { data: lojas, error } = await supabase
       .from('lojas')
       .select('id')
