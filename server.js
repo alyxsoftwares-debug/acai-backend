@@ -1302,6 +1302,9 @@ async function verificarPagamentoMP(lojaId, idPagamento) {
 }
 
 async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
+  // ADICIONE ESTA LINHA:
+  const config = await getConfiguracoes(lojaId);
+  
   const modoMP  = (config.pix_modo || 'MANUAL').toUpperCase();
 
   if (modoMP !== 'AUTO') {
