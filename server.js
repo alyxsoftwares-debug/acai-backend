@@ -390,9 +390,13 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
   const payload = { 
     ...configObj, 
     loja_id: lojaId,
-    preco_kg: parseFloat(configObj.preco_kg) || 0,
     frete_gratis: parseFloat(configObj.frete_gratis) || 0
   };
+  
+  if (configObj.preco_kg_dias) {
+    payload.preco_kg_dias = configObj.preco_kg_dias;
+  }
+  delete payload.preco_kg; // Remove o antigo para evitar conflito
 
   const { error: erroBanco } = await supabase
     .from('configuracoes')
