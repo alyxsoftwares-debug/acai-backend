@@ -392,11 +392,19 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
     loja_id: lojaId,
     frete_gratis: parseFloat(configObj.frete_gratis) || 0
   };
-  
+
   if (configObj.preco_kg_dias) {
     payload.preco_kg_dias = configObj.preco_kg_dias;
   }
-  delete payload.preco_kg; // Remove o antigo para evitar conflito
+  // Limpa a variável antiga para não gerar conflito no banco
+  delete payload.preco_kg;
+
+  // NOVOS CAMPOS DE HORÁRIOS:
+  if (configObj.horarios_dias) {
+    payload.horarios_dias = configObj.horarios_dias;
+  }
+  delete payload.hora_abre;
+  delete payload.hora_fecha;
 
   const { error: erroBanco } = await supabase
     .from('configuracoes')
