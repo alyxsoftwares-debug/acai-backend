@@ -427,7 +427,7 @@ async function lerTabela(lojaId, tabela) {
   let query = supabase.from(tabela).select('*').eq('loja_id', lojaId);
   
   // Aplica ordenação apenas nas tabelas que realmente possuem a coluna "ordem"
-  const tabelasComOrdem = ['cardapio', 'acai_categorias', 'acai_ingredientes', 'acai_modelos', 'bairros'];
+  const tabelasComOrdem = ['cardapio', 'cardapio_categorias', 'acai_categorias', 'acai_ingredientes', 'acai_modelos', 'bairros'];
   
   if (tabelasComOrdem.includes(tabela)) {
     query = query.order('ordem', { ascending: true, nullsFirst: false });
@@ -444,7 +444,7 @@ async function lerTabela(lojaId, tabela) {
 }
 
 const _CACHE_TABELAS = new Set([
-  'cardapio', 'acai_modelos', 'acai_categorias',
+  'cardapio', 'cardapio_categorias', 'acai_modelos', 'acai_categorias',
   'acai_ingredientes', 'bairros', 'configuracoes', 'cupons',
 ]);
 
@@ -508,12 +508,13 @@ async function deletarRegistro(lojaId, tabela, campoId, valorId) {
 
 async function getDadosPainelGeral(lojaId) {
   const [
-    usuarios, itensFixos, acaiCategorias, acaiIngredientes,
+    usuarios, itensFixos, cardapioCategorias, acaiCategorias, acaiIngredientes,
     acaiModelos, bairros, cupons, taras, configuracoes,
     pedidosDia, deliveryAtivo,
   ] = await Promise.all([
     lerTabela(lojaId, 'usuarios'),
     lerTabela(lojaId, 'cardapio'),
+    lerTabela(lojaId, 'cardapio_categorias'),
     lerTabela(lojaId, 'acai_categorias'),
     lerTabela(lojaId, 'acai_ingredientes'),
     lerTabela(lojaId, 'acai_modelos'),
@@ -526,7 +527,7 @@ async function getDadosPainelGeral(lojaId) {
   ]);
 
   return {
-    usuarios, itensFixos, acaiCategorias, acaiIngredientes,
+    usuarios, itensFixos, cardapioCategorias, acaiCategorias, acaiIngredientes,
     acaiModelos, bairros, cupons, taras, configuracoes,
     pedidosDia, deliveryAtivo,
   };
@@ -556,9 +557,10 @@ async function getCardapioClienteCache(lojaId) {
   const cached = _getCacheCardapio(lojaId);
   if (cached) return cached;
 
-  const [config, prontos, tamanhos, categorias, ingredientes, bairros] = await Promise.all([
+  const [config, prontos, cardapioCategorias, tamanhos, categorias, ingredientes, bairros] = await Promise.all([
     getConfiguracoes(lojaId),
     lerTabela(lojaId, 'cardapio'),
+    lerTabela(lojaId, 'cardapio_categorias'),
     lerTabela(lojaId, 'acai_modelos'),
     lerTabela(lojaId, 'acai_categorias'),
     lerTabela(lojaId, 'acai_ingredientes'),
@@ -568,6 +570,7 @@ async function getCardapioClienteCache(lojaId) {
   const pacote = {
     configuracoes: config,
     prontos:      prontos.filter(i => i.disponivel === true && i.mostrar_online !== false),
+    cardapioCategorias,
     tamanhos:     tamanhos.filter(m => m.disponivel === true),
     categorias,
     ingredientes: ingredientes.filter(i => i.disponivel === true),
@@ -1164,8 +1167,10 @@ const salvarAcaiIngrediente = (lojaId, d) => salvarRegistro(lojaId, 'acai_ingred
 const excluirAcaiIngrediente= (lojaId, id) => deletarRegistro(lojaId, 'acai_ingredientes','id_ingrediente', id);
 const salvarAcaiModelo      = (lojaId, d) => salvarRegistro(lojaId, 'acai_modelos',      d, 'id_modelo');
 const excluirAcaiModelo     = (lojaId, id) => deletarRegistro(lojaId, 'acai_modelos',      'id_modelo',      id);
-const salvarItemFixo        = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          d, 'id_item');
-const excluirItemFixo       = (lojaId, id) => deletarRegistro(lojaId, 'cardapio',          'id_item',        id);
+const salvarItemFixo             = (lojaId, d) => salvarRegistro(lojaId, 'cardapio',          d, 'id_item');
+const excluirItemFixo            = (lojaId, id) => deletarRegistro(lojaId, 'cardapio',          'id_item',        id);
+const salvarCardapioCategoria    = (lojaId, d) => salvarRegistro(lojaId, 'cardapio_categorias', d, 'id_categoria');
+const excluirCardapioCategoria   = (lojaId, id) => deletarRegistro(lojaId, 'cardapio_categorias','id_categoria', id);
 const salvarBairro          = (lojaId, d) => salvarRegistro(lojaId, 'bairros',           d, 'id_bairro');
 const excluirBairro         = (lojaId, id) => deletarRegistro(lojaId, 'bairros',           'id_bairro',      id);
 const salvarCupom           = (lojaId, d) => salvarRegistro(lojaId, 'cupons',            d, 'codigo_cupom');
@@ -1541,9 +1546,13 @@ app.post('/api/lojas/:loja_id/itens-fixos',
   ...guardCargo('Dono'),
   handler(req => salvarItemFixo(req.lojaUUID, req.body)));
 
-app.delete('/api/lojas/:loja_id/itens-fixos/:id',
+app.post('/api/lojas/:loja_id/cardapio-categorias',
   ...guardCargo('Dono'),
-  handler(req => excluirItemFixo(req.lojaUUID, req.params.id)));
+  handler(req => salvarCardapioCategoria(req.lojaUUID, req.body)));
+
+app.delete('/api/lojas/:loja_id/cardapio-categorias/:id',
+  ...guardCargo('Dono'),
+  handler(req => excluirCardapioCategoria(req.lojaUUID, req.params.id)));
 
 app.post('/api/lojas/:loja_id/bairros',
   ...guardCargo('Dono'),
