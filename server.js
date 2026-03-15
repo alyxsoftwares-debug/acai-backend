@@ -1546,6 +1546,10 @@ app.post('/api/lojas/:loja_id/itens-fixos',
   ...guardCargo('Dono'),
   handler(req => salvarItemFixo(req.lojaUUID, req.body)));
 
+app.get('/api/lojas/:loja_id/cardapio-categorias',
+  ...guardLoja,
+  handler(req => lerTabela(req.lojaUUID, 'cardapio_categorias')));
+
 app.post('/api/lojas/:loja_id/cardapio-categorias',
   ...guardCargo('Dono'),
   handler(req => salvarCardapioCategoria(req.lojaUUID, req.body)));
