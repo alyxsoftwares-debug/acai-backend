@@ -1469,13 +1469,10 @@ app.post('/api/lojas/:loja_id/auth/login', resolverLojaId, handler(async (req, r
   return {
     sucesso: true,
     token: token,
-    usuario: {
-      loja_id: req.lojaUUID,
-      nome: auth.nome,
-      cargo: auth.cargo,
-      foto_perfil: auth.fotoPerfil,
-      permissoes: auth.permissoes
-    }
+    nome: auth.nome,
+    cargo: auth.cargo,
+    fotoPerfil: auth.fotoPerfil,
+    permissoes: auth.permissoes
   };
 }));
 
