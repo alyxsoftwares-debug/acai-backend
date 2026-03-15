@@ -362,14 +362,11 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
   if ((resLoja.data.status || 'ativo').toLowerCase() === 'bloqueado')
     return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
 
-  if (errLoja || !loja) return { sucesso: false, mensagem: 'Loja não encontrada.' };
-  if ((loja.status || 'ativo').toLowerCase() === 'bloqueado') {
-    return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
-  }
-
   const cargo = (d.cargo || '').toString();
   return {
     sucesso:    true,
+    id_usuario: d.id_usuario,
+    loginNorm,
     cargo,
     nome:       (d.nome || '').toString(),
     fotoPerfil: (d.foto_perfil || '').toString(),
@@ -1453,18 +1450,6 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
 // ══════════════════════════════════════════════════════════
 // ROTAS — AUTENTICAÇÃO
 // ══════════════════════════════════════════════════════════
-
-// Em validarLogin(), no return de sucesso:
-const cargo = (d.cargo || '').toString();
-return {
-  sucesso:    true,
-  id_usuario: d.id_usuario,   // ← adicionar este campo
-  loginNorm,                  // ← adicionar este campo
-  cargo,
-  nome:       (d.nome || '').toString(),
-  fotoPerfil: (d.foto_perfil || '').toString(),
-  permissoes: getPermissoesCargo(cargo),
-};
 
 app.post('/api/lojas/:loja_id/auth/validar-supervisor', resolverLojaId, handler(req =>
   validarSupervisorOuAcima(req.lojaUUID, req.body.login, req.body.senha)
