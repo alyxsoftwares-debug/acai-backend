@@ -84,7 +84,15 @@ app.use('/api/lojas/:loja_id/auth/login', limiterLogin);
 // ══════════════════════════════════════════════════════════
 
 const _slugCache = new Map(); // slug → { uuid, ts }
-const SLUG_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
+// CACHE_ENABLED=false desativa o cache em ambientes multi-instância (ex: Render com múltiplos workers)
+// Para produção escalável, substituir por Redis (ioredis).
+const SLUG_CACHE_TTL_MS = process.env.CACHE_ENABLED === 'false'
+  ? 0
+  : 60 * 60 * 1000; // 1 hora
+
+if (process.env.CACHE_ENABLED === 'false') {
+  console.warn('⚠️  Cache in-memory desativado. Recomendado usar Redis em produção multi-instância.');
+}
 
 async function slugParaUUID(slug) {
   if (!slug) return null;
@@ -106,7 +114,11 @@ async function slugParaUUID(slug) {
     .single();
 
   if (error || !data) {
-    _slugCache.set(slug, { uuid: null, ts: Date.now() - (SLUG_CACHE_TTL_MS - 30_000) }); // expira em 30s
+    if (SLUG_CACHE_TTL_MS > 0) {
+      // Cache negativo com TTL de 5 minutos — impede flood de queries para slugs inválidos
+      const SLUG_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+      _slugCache.set(slug, { uuid: null, ts: Date.now() - (SLUG_CACHE_TTL_MS - SLUG_NEGATIVE_TTL_MS) });
+    }
     return null;
   }
 
@@ -179,7 +191,9 @@ function _parseDataDDMMYYYY(str) {
   if (partes.length !== 3) return null;
   const [d, m, a] = partes.map(Number);
   if (isNaN(d) || isNaN(m) || isNaN(a)) return null;
-  return new Date(a, m - 1, d);
+  if (d < 1 || d > 31 || m < 1 || m > 12 || a < 2000 || a > 2100) return null;
+  // Cria a data em UTC para evitar ambiguidade de fuso horário
+  return new Date(Date.UTC(a, m - 1, d));
 }
 
 function _resumoVazio() {
@@ -291,6 +305,8 @@ async function verificarStatusLoja(req, res, next) {
 const guardLoja  = [resolverLojaId, autenticar, verificarLojaAcesso, verificarStatusLoja];
 const guardCargo = (...cargos) => [...guardLoja, exigirCargo(...cargos)];
 
+const IS_PROD = process.env.NODE_ENV === 'production';
+
 const handler = fn => async (req, res) => {
   try {
     const resultado = await fn(req, res);
@@ -298,7 +314,10 @@ const handler = fn => async (req, res) => {
   } catch (err) {
     console.error('[ERRO]', err);
     if (!res.headersSent)
-      res.status(500).json({ sucesso: false, mensagem: err.message });
+      res.status(500).json({
+        sucesso: false,
+        mensagem: IS_PROD ? 'Erro interno. Tente novamente ou contate o suporte.' : err.message,
+      });
   }
 };
 
@@ -314,35 +333,34 @@ async function validarLogin(lojaId, usuarioDigitado, senhaDigitada) {
 
   const loginNorm = usuarioDigitado.toString().trim().toLowerCase();
 
-  const { data: usrs, error: errUsr } = await supabase
-    .from('usuarios')
-    .select('id_usuario, login, senha, nome, cargo, status, foto_perfil')
-    .eq('loja_id', lojaId)
-    .ilike('login', loginNorm)
-    .limit(1);
+  // Busca usuário e loja em paralelo para reduzir latência
+  const [resUsr, resLoja] = await Promise.all([
+    supabase.from('usuarios')
+      .select('id_usuario, login, senha, nome, cargo, status, foto_perfil')
+      .eq('loja_id', lojaId).ilike('login', loginNorm).limit(1),
+    supabase.from('lojas')
+      .select('status').eq('id', lojaId).single(),
+  ]);
 
-  if (errUsr) throw new Error(errUsr.message);
-  if (!usrs || usrs.length === 0)
+  if (resUsr.error) throw new Error(resUsr.error.message);
+  if (!resUsr.data || resUsr.data.length === 0)
     return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
 
-  const d = usrs[0];
+  const d = resUsr.data[0];
 
   const senhaNobanco = (d.senha || '').toString();
-  const senhaValida = senhaDigitada.toString() === senhaNobanco;
+  const senhaValida  = senhaDigitada.toString() === senhaNobanco;
 
-  if (!senhaValida) {
+  if (!senhaValida)
     return { sucesso: false, mensagem: 'Usuário ou senha inválidos.' };
-  }
-  if ((d.status || '').toString().toLowerCase() !== 'ativo') {
+  if ((d.status || '').toString().toLowerCase() !== 'ativo')
     return { sucesso: false, mensagem: 'Acesso bloqueado. Contate a gerência.' };
-  }
 
-  // Verifica status da loja
-  const { data: loja, error: errLoja } = await supabase
-    .from('lojas')
-    .select('status')
-    .eq('id', lojaId)
-    .single();
+  // Status da loja já foi buscado em paralelo
+  if (resLoja.error || !resLoja.data)
+    return { sucesso: false, mensagem: 'Loja não encontrada.' };
+  if ((resLoja.data.status || 'ativo').toLowerCase() === 'bloqueado')
+    return { sucesso: false, mensagem: 'Esta loja está bloqueada. Verifique o pagamento da assinatura.' };
 
   if (errLoja || !loja) return { sucesso: false, mensagem: 'Loja não encontrada.' };
   if ((loja.status || 'ativo').toLowerCase() === 'bloqueado') {
@@ -375,7 +393,13 @@ async function validarSupervisorOuAcima(lojaId, login, senha) {
 // CONFIGURAÇÕES
 // ══════════════════════════════════════════════════════════
 
-async function getConfiguracoes(lojaId) {
+// Campos sensíveis nunca retornados ao frontend
+const _CAMPOS_SENSIVEIS_CONFIG = 'mp_access_token';
+
+async function getConfiguracoes(lojaId, { incluirSensiveis = false } = {}) {
+  const campos = incluirSensiveis ? '*' : `*, ${_CAMPOS_SENSIVEIS_CONFIG}`;
+  // Supabase não tem "select all except", então selecione explicitamente
+  // ou remova o campo após a query:
   const { data, error } = await supabase
     .from('configuracoes')
     .select('*')
@@ -383,7 +407,28 @@ async function getConfiguracoes(lojaId) {
     .single();
 
   if (error && error.code !== 'PGRST116') throw new Error(error.message);
-  return data || {};
+  if (!data) return {};
+
+  // Remove o token sensível antes de retornar ao contexto não-privilegiado
+  if (!incluirSensiveis) {
+    const { mp_access_token, ...configSemToken } = data;
+    return configSemToken;
+  }
+  return data;
+}
+
+// Em gerarPixMP e verificarPagamentoMP, passe { incluirSensiveis: true }:
+async function gerarPixMP(lojaId, total, idVenda, emailPagador) {
+  const config = await getConfiguracoes(lojaId, { incluirSensiveis: true });
+  // ...
+}
+async function verificarPagamentoMP(lojaId, idPagamento) {
+  const config = await getConfiguracoes(lojaId, { incluirSensiveis: true });
+  // ...
+}
+async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
+  const config = await getConfiguracoes(lojaId, { incluirSensiveis: true });
+  // ...
 }
 
 async function salvarConfiguracoesLote(lojaId, configObj) {
@@ -392,6 +437,11 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
     loja_id: lojaId,
     frete_gratis: parseFloat(configObj.frete_gratis) || 0
   };
+
+  // Não sobrescreve token sensível se vier vazio no payload
+  if (!payload.mp_access_token || !payload.mp_access_token.toString().trim()) {
+    delete payload.mp_access_token;
+  }
 
   if (configObj.preco_kg_dias) {
     payload.preco_kg_dias = configObj.preco_kg_dias;
@@ -423,8 +473,13 @@ async function salvarConfiguracoesLote(lojaId, configObj) {
 /**
  * Lê todos os registros de uma tabela filtrando por loja_id.
  */
+const _CAMPOS_EXCLUIDOS = {
+  usuarios: 'id_usuario, login, nome, cargo, status, foto_perfil', // nunca retorna 'senha'
+};
+
 async function lerTabela(lojaId, tabela) {
-  let query = supabase.from(tabela).select('*').eq('loja_id', lojaId);
+  const campos = _CAMPOS_EXCLUIDOS[tabela] || '*';
+  let query = supabase.from(tabela).select(campos).eq('loja_id', lojaId);
   
   // Aplica ordenação apenas nas tabelas que realmente possuem a coluna "ordem"
   const tabelasComOrdem = ['cardapio', 'cardapio_categorias', 'acai_categorias', 'acai_ingredientes', 'acai_modelos', 'bairros'];
@@ -607,18 +662,23 @@ async function getPedidosPorPeriodo(lojaId, dataInicio, dataFim) {
   // Usa Intl para montar o offset correto a partir do TZ configurado
   function _isoComFuso(date, hora) {
     const pad = n => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${hora}`;
+    // Usa métodos UTC para ser consistente com Date.UTC() em _parseDataDDMMYYYY
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth()+1)}-${pad(date.getUTCDate())}T${hora}`;
   }
-  function _getTZOffset() {
-    const now = new Date();
-    const utc = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-    const local = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
-    const diff = (utc - local) / 60000;
-    const sign = diff > 0 ? '-' : '+';
-    const h = String(Math.floor(Math.abs(diff) / 60)).padStart(2, '0');
-    const m = String(Math.abs(diff) % 60).padStart(2, '0');
-    return `${sign}${h}:${m}`;
-  }
+  // Memoize o offset — calculado uma vez por processo
+let _cachedTZOffset = null;
+function _getTZOffset() {
+  if (_cachedTZOffset) return _cachedTZOffset;
+  const now = new Date();
+  const utc   = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const local = new Date(now.toLocaleString('en-US', { timeZone: TZ }));
+  const diff  = (utc - local) / 60000;
+  const sign  = diff > 0 ? '-' : '+';
+  const h     = String(Math.floor(Math.abs(diff) / 60)).padStart(2, '0');
+  const m     = String(Math.abs(diff) % 60).padStart(2, '0');
+  _cachedTZOffset = `${sign}${h}:${m}`;
+  return _cachedTZOffset;
+}
   const offset = _getTZOffset();
   const isoIni = _isoComFuso(dtIni, '00:00:00.000') + offset;
   const isoFim = _isoComFuso(dtFim, '23:59:59.999') + offset;
@@ -1031,10 +1091,24 @@ async function _validarDadosPedidoOnline(lojaId, dadosPedido) {
   const config = await getConfiguracoes(lojaId);
   if ((config.status_loja || 'AUTOMATICO') === 'FORCAR_FECHADO')
     throw new Error('A loja está fechada no momento. Tente mais tarde.');
-  const subtotalReal    = Math.round(dadosPedido.itens.reduce((s, i) => s + parseFloat(i.preco || 0), 0) * 100) / 100;
-  const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
-  if (Math.abs(subtotalReal - subtotalEnviado) > 0.05)
-    throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
+  // Busca os preços reais do banco para confrontar
+const cardapio = await getCardapioClienteCache(lojaId);
+const todosItensCardapio = [
+  ...(cardapio.prontos      || []),
+  ...(cardapio.ingredientes || []),
+  ...(cardapio.tamanhos     || []),  // acai_modelos (tamanhos/modelos de açaí)
+];
+
+let subtotalReal = 0;
+for (const itemPedido of dadosPedido.itens) {
+  const itemRef = todosItensCardapio.find(c => c.id_item === itemPedido.id_item || c.id_ingrediente === itemPedido.id_ingrediente);
+  if (!itemRef) throw new Error(`Item "${itemPedido.descricao || itemPedido.id_item}" não encontrado no cardápio.`);
+  subtotalReal = Math.round((subtotalReal + parseFloat(itemRef.preco || 0)) * 100) / 100;
+}
+
+const subtotalEnviado = parseFloat(dadosPedido.subtotal || 0);
+if (Math.abs(subtotalReal - subtotalEnviado) > 0.01)
+  throw new Error('Divergência financeira detectada. Pedido rejeitado por segurança.');
   const desconto = parseFloat(dadosPedido.desconto    || 0);
   const taxaEnt  = parseFloat(dadosPedido.taxaEntrega || 0);
   const total    = Math.max(0, Math.round((subtotalReal - desconto + taxaEnt) * 100) / 100);
@@ -1319,7 +1393,6 @@ async function verificarPagamentoMP(lojaId, idPagamento) {
 }
 
 async function finalizarPedidoOnlineComPix(lojaId, dadosPedido) {
-  // ADICIONE ESTA LINHA:
   const config = await getConfiguracoes(lojaId);
   
   const modoMP  = (config.pix_modo || 'MANUAL').toUpperCase();
@@ -1381,19 +1454,17 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
 // ROTAS — AUTENTICAÇÃO
 // ══════════════════════════════════════════════════════════
 
-app.post('/api/lojas/:loja_id/auth/login', resolverLojaId, handler(async req => {
-  const lojaId    = req.lojaUUID;
-  const resultado = await validarLogin(lojaId, req.body.usuario, req.body.senha);
-
-  if (resultado.sucesso) {
-    resultado.token = jwt.sign(
-      { loja_id: lojaId, id: req.body.usuario, nome: resultado.nome, cargo: resultado.cargo },
-      JWT_SECRET,
-      { expiresIn: '8h' }
-    );
-  }
-  return resultado;
-}));
+// Em validarLogin(), no return de sucesso:
+const cargo = (d.cargo || '').toString();
+return {
+  sucesso:    true,
+  id_usuario: d.id_usuario,   // ← adicionar este campo
+  loginNorm,                  // ← adicionar este campo
+  cargo,
+  nome:       (d.nome || '').toString(),
+  fotoPerfil: (d.foto_perfil || '').toString(),
+  permissoes: getPermissoesCargo(cargo),
+};
 
 app.post('/api/lojas/:loja_id/auth/validar-supervisor', resolverLojaId, handler(req =>
   validarSupervisorOuAcima(req.lojaUUID, req.body.login, req.body.senha)
@@ -1407,9 +1478,13 @@ app.post('/api/lojas/:loja_id/auth/validar-supervisor', resolverLojaId, handler(
 app.post('/api/webhooks/asaas', async (req, res) => {
   try {
     const tokenRecebido = req.headers['asaas-access-token'] || req.headers['x-access-token'] || '';
-    if (ASAAS_WEBHOOK_TOKEN && tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
-      console.warn('[Webhook Asaas] Token inválido:', tokenRecebido);
-      return res.status(401).json({ sucesso: false, mensagem: 'Token inválido.' });
+    if (!ASAAS_WEBHOOK_TOKEN) {
+    console.error('[Webhook Asaas] ❌ ASAAS_WEBHOOK_TOKEN não configurado — requisição bloqueada!');
+    return res.status(503).json({ sucesso: false, mensagem: 'Webhook não configurado.' });
+    }
+    if (tokenRecebido !== ASAAS_WEBHOOK_TOKEN) {
+    console.warn('[Webhook Asaas] Token inválido recebido.');
+    return res.status(401).json({ sucesso: false, mensagem: 'Token inválido.' });
     }
 
     const { event, payment } = req.body;
@@ -1453,7 +1528,10 @@ app.post('/api/webhooks/asaas', async (req, res) => {
 
   } catch (err) {
     console.error('[Webhook Asaas] Erro:', err);
-    return res.status(500).json({ sucesso: false, mensagem: err.message });
+    return res.status(500).json({
+      sucesso: false,
+      mensagem: IS_PROD ? 'Erro interno ao processar webhook.' : err.message,
+    });
   }
 });
 
@@ -1566,6 +1644,19 @@ app.delete('/api/lojas/:loja_id/bairros/:id',
   ...guardCargo('Dono'),
   handler(req => excluirBairro(req.lojaUUID, req.params.id)));
 
+const limiterCupom = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutos
+  max: 20,
+  keyGenerator: (req) => `${req.ip}-${req.params.loja_id}`,
+  message: { valido: false, mensagem: 'Muitas tentativas. Aguarde alguns minutos.' },
+});
+
+// Rota pública de validação de cupom — deve ser registrada ANTES de rotas com :id
+app.get('/api/lojas/:loja_id/cupons/validar',
+  limiterCupom,
+  resolverLojaId,
+  handler(req => validarCupom(req.lojaUUID, req.query.codigo)));
+
 app.post('/api/lojas/:loja_id/cupons',
   ...guardCargo('Dono'),
   handler(req => salvarCupom(req.lojaUUID, req.body)));
@@ -1573,11 +1664,6 @@ app.post('/api/lojas/:loja_id/cupons',
 app.delete('/api/lojas/:loja_id/cupons/:id',
   ...guardCargo('Dono'),
   handler(req => excluirCupom(req.lojaUUID, req.params.id)));
-
-// Rota pública de validação de cupom
-app.get('/api/lojas/:loja_id/cupons/validar',
-  resolverLojaId,
-  handler(req => validarCupom(req.lojaUUID, req.query.codigo)));
 
 app.post('/api/lojas/:loja_id/taras',
   ...guardCargo('Dono', 'Gerente'),
@@ -1643,6 +1729,8 @@ app.patch('/api/lojas/:loja_id/pedidos/:id/status-entrega',
 
 app.post('/api/lojas/:loja_id/pedidos/:id/cancelar',
   resolverLojaId,
+  autenticar,           // exige sessão JWT válida
+  verificarLojaAcesso,  // garante que o token pertence à loja
   handler(req => cancelarPedidoAutorizado(req.lojaUUID, req.params.id, req.body.login, req.body.senha)));
 
 app.post('/api/lojas/:loja_id/pedidos/:id/pegar-delivery',
@@ -1685,15 +1773,26 @@ app.get('/api/lojas/:loja_id/pedidos/relatorio',
 // ROTAS — MERCADO PAGO / PIX
 // ══════════════════════════════════════════════════════════
 
+// Para clientes do cardápio online, adicione um rate limit por IP em vez de exigir JWT
+const limiterPix = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutos
+  max: 10,
+  keyGenerator: (req) => `${req.ip}-${req.params.loja_id}`,
+  message: { sucesso: false, mensagem: 'Muitas requisições PIX. Aguarde.' },
+});
+
 app.post('/api/lojas/:loja_id/pix/gerar',
+  limiterPix,
   resolverLojaId,
   handler(req => gerarPixMP(req.lojaUUID, req.body.total, req.body.idVenda, req.body.emailPagador)));
 
 app.get('/api/lojas/:loja_id/pix/verificar/:idPagamento',
+  limiterPix,
   resolverLojaId,
   handler(req => verificarPagamentoMP(req.lojaUUID, req.params.idPagamento)));
 
 app.post('/api/lojas/:loja_id/pix/confirmar',
+  limiterPix,
   resolverLojaId,
   handler(req => confirmarPagamentoELiberarPedido(req.lojaUUID, req.body.idVenda, req.body.idPagamento)));
 
