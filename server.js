@@ -1451,6 +1451,34 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
 // ROTAS — AUTENTICAÇÃO
 // ══════════════════════════════════════════════════════════
 
+app.post('/api/lojas/:loja_id/auth/login', resolverLojaId, handler(async (req, res) => {
+  const { login, senha } = req.body;
+  const auth = await validarLogin(req.lojaUUID, login, senha);
+  
+  if (!auth.sucesso) return auth;
+
+  // Gera o token de segurança da sessão
+  const token = jwt.sign({
+    loja_id: req.lojaUUID,
+    id_usuario: auth.id_usuario,
+    login: auth.loginNorm,
+    cargo: auth.cargo,
+    nome: auth.nome
+  }, JWT_SECRET, { expiresIn: '12h' });
+
+  return {
+    sucesso: true,
+    token: token,
+    usuario: {
+      loja_id: req.lojaUUID,
+      nome: auth.nome,
+      cargo: auth.cargo,
+      foto_perfil: auth.fotoPerfil,
+      permissoes: auth.permissoes
+    }
+  };
+}));
+
 app.post('/api/lojas/:loja_id/auth/validar-supervisor', resolverLojaId, handler(req =>
   validarSupervisorOuAcima(req.lojaUUID, req.body.login, req.body.senha)
 ));
