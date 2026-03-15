@@ -1452,8 +1452,8 @@ async function confirmarPagamentoELiberarPedido(lojaId, idVenda, idPagamento) {
 // ══════════════════════════════════════════════════════════
 
 app.post('/api/lojas/:loja_id/auth/login', resolverLojaId, handler(async (req, res) => {
-  const { login, senha } = req.body;
-  const auth = await validarLogin(req.lojaUUID, login, senha);
+  const { usuario, senha } = req.body;
+  const auth = await validarLogin(req.lojaUUID, usuario, senha);
   
   if (!auth.sucesso) return auth;
 
