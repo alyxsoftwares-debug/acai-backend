@@ -1,8 +1,8 @@
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║  AÇAÍTERIA SaaS — BACK-END Node.js + Express + Supabase/PostgreSQL          ║
+ * ║  AlyxSoftwares SaaS — BACK-END Node.js + Express + Supabase/PostgreSQL      ║
  * ║  Arquitetura Multi-tenant  |  Cobrança via Asaas                            ║
- * ║  Schema: acaiteria                                                           ║
+ * ║  Suporta: Açaiterias, Lanchonetes, Restaurantes, Pizzarias e mais           ║
  * ║                                                                              ║
  * ║  Tabelas (schema acaiteria):                                                 ║
  * ║   lojas, usuarios, pedidos, cardapio, acai_categorias                        ║
@@ -45,7 +45,7 @@ if (!ASAAS_WEBHOOK_TOKEN) {
   console.warn('⚠️  ASAAS_WEBHOOK_TOKEN não definido — webhook Asaas estará desprotegido!');
 }
 
-// ─── SUPABASE CLIENT (schema: acaiteria) ─────────────────────────────────────
+// ─── SUPABASE CLIENT (schema: acaiteria — legado, mantido para compatibilidade) ─
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   db: { schema: 'acaiteria' },
